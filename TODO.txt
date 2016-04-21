@@ -1,0 +1,29 @@
+* More testing under Windows.  Or any, really...
+
+* Move encryption type field from termination message to header.
+
+* Fix bug: if at least one new block wasn't mined in between the state being saved & restored, the program crashes.
+
+* Add code that gracefully detects if Python2 was mistakenly used.
+
+* Check if all compression programs are available at run time.
+
+* Automatically parse bitcoin.conf/dogecoin.conf file for RPC server credentials.
+
+* Finish implementing deadman switch.
+
+* Implement parallel transactions.
+
+* Migrate from polling RPC server during publication to a callback architecture.
+
+* Add functionality to search for content through specific ranges of the blockchain.
+
+* Add comprehensive testing framework, including tests for blockchain forks & rollbacks.
+
+* Create ECDSA keys directly so that the wallet does not get polluted (note that wallet key deletion is not supported by Bitcoin).
+
+* Improve the publication cost estimator to more accurately account for overhead.
+
+* Add code to retransmit transaction if it is not confirmed after X blocks.
+
+
