@@ -261,21 +261,26 @@ class Publication:
         if self.debug:
             print(s)
 
+
     def v(self, s):
         if self.verbose:
             print(s)
 
+
     def set_amount(self, amount):
         self.amount = amount
+
 
     # Return the number of confirmations a transaction needs in order to be
     # considered finalized.
     def get_confirmation_threshold(self):
         return Publication.CONFIRMATION_THRESHOLD_BTC if self.blockchain == Publication.BLOCKCHAIN_BTC else Publication.CONFIRMATION_THRESHOLD_DOGE
 
+
     # Returns "BTC" or "DOGE", depending on which chain we are publishing on.
     def get_currency_str(self):
         return "BTC" if self.blockchain == Publication.BLOCKCHAIN_BTC else "DOGE"
+
 
     # Returns the amount that each TX output should have, excluding the fee
     # (since vin - vout = fee).
@@ -312,7 +317,6 @@ class Publication:
     def update_unconfirmed_bytes(self, num_bytes):
         self.bytes_unconfirmed += num_bytes
         self.d("update_unconfirmed_bytes(%d); count: %d" % (num_bytes, self.bytes_unconfirmed))
-
 
 
     # Return an estimate as to how long the specified number of transactions
@@ -378,7 +382,6 @@ class Publication:
 
             # Update the length since we just modified the block.
             byte_block_len = len(byte_block)
-            
 
 
         num_keys = int(byte_block_len / 32)
