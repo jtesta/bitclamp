@@ -24,7 +24,7 @@ class Utils:
     # Converts a byte array to a Base58 string.
     @staticmethod
     def base58_encode(the_bytes):
-        hex_bytes = binascii.hexlify(the_bytes).decode('utf-8')
+        hex_bytes = binascii.hexlify(the_bytes).decode('ascii')
         if len(hex_bytes) % 2:
             hex_bytes = '0x0' + hex_bytes
         else:
@@ -111,11 +111,11 @@ class Utils:
             return Publication.CONTENT_TYPE_SOUND
 
         # Video?
-        elif ext in ['webm', 'mpg', 'mpeg', 'mov', 'mp4', 'mkv', 'avi', 'divx', 'wmv', '3gp', '3g2']:
+        elif ext in ['webm', 'mpg', 'mpeg', 'mov', 'mp4', 'mkv', 'avi', 'divx', 'wmv', '3gp', '3g2', 'gifv']:
             return Publication.CONTENT_TYPE_VIDEO
 
         # Source code?
-        elif ext in ['py', 'rb', 'js', 'java', 'c', 'cpp', 'h', 'php', 'cs', 'sh', 'go', 's', 'pl', 'vb', 'vbs', 'ps1', 'bat']:
+        elif ext in ['py', 'rb', 'js', 'java', 'c', 'cpp', 'h', 'php', 'cs', 'sh', 'go', 's', 'pl', 'vb', 'vbs', 'ps1', 'bat', 'sol']:
             return Publication.CONTENT_TYPE_SOURCE_CODE
 
         # Digital signature?
@@ -123,7 +123,7 @@ class Utils:
             return Publication.CONTENT_TYPE_DIGITAL_SIGNATURE
 
         # Archive?
-        elif ext in ['tar', 'zip', 'bz2', 'gz', 'xz', '7z', 'lzma', 'iso', 'gpg']:
+        elif ext in ['tar', 'zip', 'bz2', 'gz', 'xz', '7z', 'lzma', 'iso', 'gpg', 'pgp']:
             return Publication.CONTENT_TYPE_ARCHIVE
 
 
