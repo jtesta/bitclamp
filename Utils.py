@@ -116,7 +116,7 @@ class Utils:
 
         # Source code?
         elif ext in ['py', 'rb', 'js', 'java', 'c', 'cpp', 'h', 'php', 'cs', 'sh', 'go', 's', 'pl', 'vb', 'vbs', 'ps1', 'bat', 'sol']:
-            return Publication.CONTENT_TYPE_SOURCE_CODE
+            return Publication.CONTENT_TYPE_SOURCECODE
 
         # Digital signature?
         elif ext in ['asc', 'sig']:
