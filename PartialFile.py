@@ -38,6 +38,8 @@ class PartialFile:
       self.block_acks = {}
       self.previous_txid = self.initial_txid
       self.temporal_key = None
+      self.encryption_type = 0
+      self.num_parallel_txs = -1
       self.finalized = False
 
 
@@ -116,24 +118,51 @@ class PartialFile:
             del(self.block_acks[sorted_offset])
 
 
-   def is_deadman_switch(self):
+   # Returns True if this is a deadman switch file, otherwise False.
+   def is_deadman_switch_file(self):
       from Publication import Publication
 
-      return True if (self.general_flags & Publication.GENERAL_FLAG_DEADMAN_SWITCH) == Publication.GENERAL_FLAG_DEADMAN_SWITCH else False
+      return True if (self.general_flags & Publication.GENERAL_FLAG_DEADMAN_SWITCH_FILE) == Publication.GENERAL_FLAG_DEADMAN_SWITCH_FILE else False
 
 
-   # Returns True if this file is completely published, or False.
+   # Returns True if this is a deadman switch key, otherwise False.
+   def is_deadman_switch_key(self):
+      from Publication import Publication
+
+      return True if (self.general_flags & Publication.GENERAL_FLAG_DEADMAN_SWITCH_KEY) == Publication.GENERAL_FLAG_DEADMAN_SWITCH_KEY else False
+
+
+   # Returns True if this file is completely published (and publicly readable), or False.  Note that fully published deadman switch files will return False here (is_complete_deadman_switch_file(), below, will return True, however).
    def is_complete(self):
-      return True if self.file_ptr == self.file_size else False
+      return True if (self.file_ptr == self.file_size) and (not self.is_deadman_switch_file()) else False
 
 
-   # Decrypts the file, if necessary.
+   # Returns True if this file is completely published, except for the deadman switch key.
+   def is_complete_deadman_switch_file(self):
+      return True if self.is_deadman_switch_file() and (self.file_ptr == self.file_size) else False
+
+
+   # Finalizes a fully published file.  Decrypts it if necessary, and moves it
+   # to its output directory.  Deadman switch files are checked for correctness
+   # (i.e.: that the published and extracted file hashes match), but are left
+   # in the partial directory.
+   #
+   # Returns True on success, or False on error.
    def finalize(self, num_parallel_txs, encryption_type, temporal_key):
       from Publication import Publication
       from Utils import Utils
 
+      # When decrypting a deadman switch, the caller doesn't know what the
+      # num_parallel_txs encryption_type values were, so we use what we stored
+      # previously.
+      if num_parallel_txs is None:
+         num_parallel_txs = self.num_parallel_txs
+      if encryption_type is None:
+         self.d('encryption_type is None, so setting to %d' % self.encryption_type)
+         encryption_type = self.encryption_type
+
       # If not all bytes were received, this is a failure.
-      if not self.is_complete():
+      if (not self.is_complete()) and (not self.is_complete_deadman_switch_file()):
          self.d("Cannot finalize because file is not complete!")
          return False
 
@@ -152,12 +181,17 @@ class PartialFile:
 
       # Check that the hash in the publication header matches what we have.
       if self.file_hash != calculated_hash:
-         self.d("Hashes do not match!:\n%s\n%s" % (binascii.hexlify(self.file_hash), binascii.hexlify(calculated_hash)))
+         self.d("Hashes do not match!:\n%s\n%s" % (binascii.hexlify(self.file_hash).decode('ascii'), binascii.hexlify(calculated_hash).decode('ascii')))
          return False
 
       # If this file is a deadman switch, don't try to decrypt, since we don't
       # have the real key here.
-      if self.is_deadman_switch():
+      if self.is_deadman_switch_file() and (temporal_key == (b'\xff' * 32)):
+         # Save the num_parallel_txs and encryption_type so that when the key
+         # is found in the future, we know how to decrypt this.
+         self.num_parallel_txs = num_parallel_txs
+         self.encryption_type = encryption_type
+         self.save_state()
          return True
 
       # Get a unique filename in the output directory.
@@ -194,11 +228,19 @@ class PartialFile:
       import base64
       from Publication import Publication
 
+      general_flags_str = 'General flags: '
+      if self.is_deadman_switch_file():
+         general_flags_str += 'Deadman Switch File'
+      elif self.is_deadman_switch_key():
+         general_flags_str += 'Deadman Switch Key'
+      else:
+         general_flags_str += 'None'
+
       s = ''
       if self.temporal_key is not None:
-         s = "Temporal Key: %s\n" % base64.b64encode(self.temporal_key).decode('ascii').strip()
+         s = "Temporal Key: %s\n" % binascii.hexlify(self.temporal_key).decode('ascii')
 
-      return "PartialFile:\n\tInitial TXID: %s\n\tSanitized filename: %s\n\tDescription: %s\n\tFile size: %d\n\tContent type: %s\n\tCompression type: %s\n\tFile hash: %s\n\tFile pointer: %d\n\tACK Window: %s\n\t%s\n\tDeadman switch: %s\n\tComplete: %r\n" % (self.initial_txid, self.sanitized_filename, self.description, self.file_size, Publication.get_content_str(self.content_type), Publication.get_compression_str(self.compression_type), binascii.hexlify(self.file_hash).decode('utf-8'), self.file_ptr, self.block_acks, s, self.is_deadman_switch(), self.is_complete())
+      return "PartialFile:\n\tInitial TXID: %s\n\tSanitized filename: %s\n\tDescription: %s\n\tFile size: %d\n\tContent type: %s\n\tCompression type: %s\n\t%s\n\tFile hash: %s\n\tFile pointer: %d\n\tACK Window: %s\n\t%s\n\tIs deadman switch file: %s\n\tIs deadman switch key: %s\n\tIs complete deadman switch file: %r\n\tIs complete: %r\n" % (self.initial_txid, self.sanitized_filename, self.description, self.file_size, Publication.get_content_str(self.content_type), Publication.get_compression_str(self.compression_type), general_flags_str, binascii.hexlify(self.file_hash).decode('ascii'), self.file_ptr, self.block_acks, s, self.is_deadman_switch_file(), self.is_deadman_switch_key(), self.is_complete_deadman_switch_file(), self.is_complete())
 
 
    # Return a unique filepath to use for a new file, based on the TXID and

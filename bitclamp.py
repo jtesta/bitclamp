@@ -58,8 +58,8 @@ parser.add_argument('--content-type', help='the type of file this is.  Acceptabl
 parser.add_argument('--compression', help='the type of compression to use.  Acceptable values: none, zip, gzip, bzip2, xz, lzma, 7zip.  If not specified, all compression methods will be tried and the one that yields the smallest file selected.', default="auto")
 parser.add_argument('--no-crypto', help='this disables the default temporal encryption that is done on the file before publishing.  Enabling this option causes the file to be published in plaintext.  This is useful if you want parts of the file to be immediately readable (i.e.: if you are in a high-pressure situation and you want to publish as much as possible before being shut down).  Otherwise, with temporal encryption enabled (the default), the file is completely unreadable until ALL of it is published.', action='store_true')
 parser.add_argument('--no-hash', help='do not store the SHA256 hash of the bytes to publish in the header.  This may only be used in conjunction with --no-crypto.  If, say, you choose to publish the file in plaintext, you may hide the plaintext\'s hash using this option.  This may protect you while the publication process completes.  Otherwise, if the default temporal encryption is used, this hash is calculated over the encrypted bytes, which is safe to make public know even if the plaintext is known ahead of time.', action='store_true')
-#parser.add_argument('--deadman-switch-save', help='enable deadman switch publication mode.  This publishes an encrypted file without automatically including the key.  The key can later be published if a secret check-in process is not completed (which must be implemented manually).  Hence, the user gains insurance against being arrested and/or killed (as this would prevent the secret check-in process from being completed in the time interval required).  For more information, see the DEADMAN_SWITCH_README.txt.  This option requires a file path to write the key information to.')
-#parser.add_argument('--deadman-switch-publish', help='publishes the key for a file already in the blockchain.  Takes the path of the file created with --deadman-switch-save as the argument.')
+parser.add_argument('--deadman-switch-save', help='enable deadman switch publication mode.  This publishes an encrypted file without automatically including the key.  The key can later be published if a secret check-in process is not completed (which must be implemented manually).  Hence, the user gains insurance against being arrested and/or killed (as this would prevent the secret check-in process from being completed in the time interval required).  For more information, see the DEADMAN_SWITCH_README.txt.  This option requires a file path to write the key information to.')
+parser.add_argument('--deadman-switch-publish', help='publishes the key for a file already in the blockchain.  Takes the path of the file created with --deadman-switch-save as the argument.  For more information, see the DEADMAN_SWITCH_README.txt.')
 
 # Load state
 parser.add_argument('--restore', help='restore an interrupted publication from a *.state file.')
@@ -97,8 +97,8 @@ compression = args['compression']
 nohash = args['no_hash']
 nocrypto = args['no_crypto']
 restore = args['restore']
-#deadman_switch_save = args['deadman_switch_save']
-#deadman_switch_publish = args['deadman_switch_save']
+deadman_switch_save = args['deadman_switch_save']
+deadman_switch_publish = args['deadman_switch_publish']
 
 
 xrpchost = args['rpchost']
@@ -211,21 +211,25 @@ if connection_count < 1:
     print("The Bitcoin server is not connected to any peers.  Check its connection settings and try again.")
     sys.exit(-1)
 
-# Ensure that the --content-type argument is valid.
-ctypes = {v: k for k, v in Publication.CONTENT_TYPE_MAP.items()}
-if content_type not in ctypes:
-    print("Error: %s is not a valid content type." % content_type)
-    sys.exit(-1)
+# If we are publishing a deadman switch key, skip content type and compression
+# option parsing.
+if deadman_switch_publish is None:
 
-content_type_const = ctypes[content_type]
+    # Ensure that the --content-type argument is valid.
+    ctypes = {v: k for k, v in Publication.CONTENT_TYPE_MAP.items()}
+    if content_type not in ctypes:
+        print("Error: %s is not a valid content type." % content_type)
+        sys.exit(-1)
 
-# Ensure that the --compression argument is valid.
-ctypes = {v: k for k, v in Publication.COMPRESSION_TYPE_MAP_STR.items()}
-if compression not in ctypes:
-    print("Error: %s is not a valid compression type." % compression)
-    sys.exit(-1)
+    content_type_const = ctypes[content_type]
 
-compression_const = ctypes[compression]
+    # Ensure that the --compression argument is valid.
+    ctypes = {v: k for k, v in Publication.COMPRESSION_TYPE_MAP_STR.items()}
+    if compression not in ctypes:
+        print("Error: %s is not a valid compression type." % compression)
+        sys.exit(-1)
+
+    compression_const = ctypes[compression]
 
 
 # If --estimate was given, and the user gave the file to estimate with...
@@ -252,6 +256,11 @@ if is_valid != True:
     print("Error: %s is not a valid address!" % change_address)
     sys.exit(-1)
 
+# If the user wants to publish a deadman switch key, lets handle that now.
+if deadman_switch_publish is not None:
+    publication = Publication(rpc_client, deadman_switch_publish, chain, testnet or regtest, txfee, change_address, debug, verbose)
+    publication.begin()
+    sys.exit(0)
 
 if filepath is None:
     print("Error: the file to publish (--file) is required.")
@@ -283,16 +292,16 @@ if not nocrypto and nohash:
 
 
 deadman_switch = None
-#if nocrypto and deadman_switch_save is not None:
-#    print("Error: --no-crypto conflicts with --deadman-switch-save.")
-#    sys.exit(-1)
+if nocrypto and (deadman_switch_save is not None):
+    print("Error: --no-crypto conflicts with --deadman-switch-save.")
+    sys.exit(-1)
 
-#if os.path.isfile(deadman_switch_save):
-#    print("Error: deadman switch key path already exists: %s" % deadman_switch_save)
-#    sys.exit(-1)
+if (deadman_switch_save is not None) and os.path.isfile(deadman_switch_save):
+    print("Error: deadman switch key path already exists: %s" % deadman_switch_save)
+    sys.exit(-1)
 
 
-publication = Publication(rpc_client, filepath, content_type_const, compression_const, filename, file_description, nocrypto, nohash, deadman_switch, chain, testnet or regtest, num_outputs, txfee, change_address, debug, verbose)
+publication = Publication(rpc_client, filepath, content_type_const, compression_const, filename, file_description, nocrypto, nohash, deadman_switch_save, chain, testnet or regtest, num_outputs, txfee, change_address, False, debug, verbose)
 
 # Register an exit handler function with a reference to this Publication.  This
 # will save the state so that it may be fully restored and resumed later.

@@ -10,8 +10,6 @@
 
 * Automatically parse bitcoin.conf/dogecoin.conf file for RPC server credentials.
 
-* Finish implementing deadman switch.
-
 * Implement parallel transactions.
 
 * Migrate from polling RPC server during publication to a callback architecture.
@@ -26,4 +24,4 @@
 
 * Add code to retransmit transaction if it is not confirmed after X blocks.
 
-
+* Test publication with self.num_bytes_per_tx set with +44.

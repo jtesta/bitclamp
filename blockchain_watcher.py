@@ -45,6 +45,25 @@ def d(s):
     if debug:
         log(s)
 
+# Decrypts a deadman switch file, given a key.  Stores the decrypted file
+# in the output directory.  Returns True on success, or False if no matching
+# deadman switch file was found (or an error occurred).
+def decrypt_deadman_switch_file(data):
+    txid_hex = binascii.hexlify(data[0:32]).decode('ascii')
+    key = data[32:64]
+    iv = data[64:96]
+    extra = data[96:128]
+
+    # Loop through all partial files and look for one whose initial TXID
+    # matches the deadman switch key data.  Then decrypt and properly store
+    # the file.
+    for partial_file in partial_files:
+        if txid_hex == partial_file.initial_txid:
+            partial_file.debug_func = d
+            return partial_file.finalize(None, None, key)
+
+    log('Failed to find a matching deadman switch file with TXID: %s' % txid_hex)
+    return False
 
 # This script must be called as:
 #    python3 blockchain_watcher.py rpchostname rpcport rpcuser rpcpass
@@ -61,7 +80,7 @@ if __name__ == '__main__':
 
     rpc_client = RPCClient(rpchost, rpcport, rpcuser, rpcpass)
 
-    if len(sys.argv) == 6 and sys.argv[5] == '-d':
+    if len(sys.argv) == 9 and sys.argv[8] == '-d':
         debug = True
 
     # Open the log file for appending.  If this fails, terminate.
@@ -204,11 +223,22 @@ if __name__ == '__main__':
                     sanitized_filename = os.path.basename(filename).replace('\\', '').replace('/', '')
 
                     partial_file = PartialFile(d, txid, output_dir, partial_dir, sanitized_filename, description, file_size, general_flags, content_type, compression_type, file_hash)
-                    log("Discovered publication: %s" % partial_file)
 
-                    partial_file.write_data(data, 0)
-                    partial_file.save_state()
-                    partial_file = None
+                    # Is this a deadman switch key?  If so, ensure that the
+                    # payload has at least 128 bytes (it should be exactly 128,
+                    # but there may be padding at this point still).
+                    if partial_file.is_deadman_switch_key() and (len(data) >= 128):
+                        log('DISCOVERED DEADMAN SWITCH KEY!: ' + binascii.hexlify(data).decode('ascii'))
+                        if decrypt_deadman_switch_file(data):
+                            log('Successfully decrypted deadman switch file!')
+                        else:
+                            log('Failed to decrypt deadman switch file.')
+                    else:
+                        log("Discovered publication: %s" % partial_file)
+
+                        partial_file.write_data(data, 0)
+                        partial_file.save_state()
+                        partial_file = None
 
                 # Header bytes not found.  Let's check this transaction
                 # references any TXIDs that we've previously processed.  If 
@@ -242,10 +272,10 @@ if __name__ == '__main__':
                             else:
                                 log("Failed to retrieve file: %s" % partial_file)
 
-                            if partial_file.is_deadman_switch():
-                                log("Deadman switch retrieved.")
+                            if partial_file.is_deadman_switch_file():
+                                log("Deadman switch file retrieved.")
 
- 
+
                             del(interesting_txids[vin_txid])
                             partial_file = None
 
@@ -254,7 +284,6 @@ if __name__ == '__main__':
                             partial_file.set_previous_txid(txid)
 
                             if file_offset == -1:
-
                                 file_offset = struct.unpack('!I', data[0:4])[0]
                                 data = data[4:]
 

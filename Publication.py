@@ -42,10 +42,9 @@ class Publication:
     # The minimum transaction amout.  See https://github.com/bitcoin/bitcoin/blob/master/src/primitives/transaction.h#L161
     DUST_THRESHOLD = 0.00010000 #0.00000546
 
-    # Header bytes to denote the beginning, continuation, and termination of
-    # a publication.  These appear first in each transaction payload.
+    # Header bytes to denote the beginning and termination of a publication.
+    # These appear first in each transaction payload.
     HEADER_BEGIN     = b'\x00\x11\x22\x33\x44\x55\x66\x77'
-    HEADER_CONTINUE  = b'\x31\x41\x59\x26\x53\x58\x97\x93'
     HEADER_TERMINATE = b'\x88\x99\xaa\xbb\xcc\xdd\xee\xff'
 
     NONCE_LEN = 8
@@ -53,7 +52,8 @@ class Publication:
 
 
     # Constants for the general flag field in the publication header.
-    GENERAL_FLAG_DEADMAN_SWITCH = 1
+    GENERAL_FLAG_DEADMAN_SWITCH_FILE = 1
+    GENERAL_FLAG_DEADMAN_SWITCH_KEY  = 1<<1
 
     # Constants for the content type field of the start of publication header.
     CONTENT_TYPE_RESERVED    = 0
@@ -98,24 +98,28 @@ class Publication:
 
     # To publish with no file name, set filename to "".  Setting it to None
     # causes it to be set to the filepath.
-    def __init__(self, rpc_client, filepath, content_type, compression_type, filename, file_description, nocrypto, nohash, deadman_switch_path, blockchain, test_or_reg_network, num_outputs, txfee, change_address, debug, verbose):
+    def __init__(self, *args):
+        if len(args) == 8:
+            self.deadman_switch_key_init(args)
+            return
 
-        self.rpc_client = rpc_client
-        self.filepath = filepath
-        self.content_type = content_type
-        self.compression_type = compression_type
-        self.filename = filename
-        self.file_description = file_description
-        self.nocrypto = nocrypto
-        self.deadman_switch_path = deadman_switch_path
-        self.blockchain = blockchain
-        self.test_or_reg_network = test_or_reg_network
-        self.num_outputs = num_outputs
-        self.txfee = txfee
-        self.change_address = change_address
+        self.rpc_client = args[0]
+        self.filepath = args[1]
+        self.content_type = args[2]
+        self.compression_type = args[3]
+        self.filename = args[4]
+        self.file_description = args[5]
+        self.nocrypto = args[6]
+        self.nohash = args[7]
+        self.deadman_switch_path = args[8]
+        self.blockchain = args[9]
+        self.test_or_reg_network = args[10]
+        self.num_outputs = args[11]
+        self.txfee = args[12]
+        self.change_address = args[13]
+        self.debug = args[14]
+        self.verbose = args[15]
 
-        self.debug = debug
-        self.verbose = verbose
 
         if len(self.filepath) == 0:
             raise Exception('filepath arg is required!')
@@ -165,7 +169,7 @@ class Publication:
         # The number of bytes published per transaction.  This is not valid for
         # the header or termination transactions; only the bulk intermediate
         # ones.  44 bytes for those are needed for the intermediate header data.
-        self.num_bytes_per_tx = (num_outputs * Publication.SINGLE_OUTPUT_SIZE) - 44
+        self.num_bytes_per_tx = (self.num_outputs * Publication.SINGLE_OUTPUT_SIZE) - 44
 
         # The amount we have to publish with.  This gets whittled down each
         # transaction by fees.  Any leftover is sent back to the user as change
@@ -240,28 +244,103 @@ class Publication:
             self.filename += new_extension
             print("Automatically adding file extension '%s' to file name to reflect usage of %s compression: %s" % (new_extension, Publication.COMPRESSION_TYPE_MAP_STR[self.compression_type], self.filename))
 
-        if nohash:
+        # If the user does not want to store the hash of the file in the publication header...
+        if self.nohash:
             self.file_hash = b'\x00' * 32
             self.v('Omitting the SHA256 hash from the publication header.')
         else:
             self.file_hash = hashlib.sha256(self.file_bytes).digest()
-            self.d("SHA256 of file bytes: %s" % binascii.hexlify(self.file_hash).decode('utf-8'))
+            self.d("SHA256 of file bytes: %s" % binascii.hexlify(self.file_hash).decode('ascii'))
 
-
-        # If we are in deadman switch mode, set the flag in the general headers.
+        # If we are in deadman switch publish mode, set the flag in the general headers.
         if self.deadman_switch_path is not None:
-            self.general_flags |= Publication.GENERAL_FLAG_DEADMAN_SWITCH
-
+            self.general_flags |= Publication.GENERAL_FLAG_DEADMAN_SWITCH_FILE
+            self.d("Setting GENERAL_FLAG_DEADMAN_SWITCH_FILE.")
 
         # For resuming publication after interruptions.
         self.state_file = "bitclamp_state_" + os.path.basename(self.filepath) + '_' + time.strftime("%Y-%m-%d_%H-%M") + '.state'
 
+        # Set a flag that denotes we are NOT trying to publish a deadman switch key (see constructor below for that code).
+        self.deadman_switch_key_publish_mode = False
 
+
+    # Special constructor for when publishing a deadman switch key.
+    def deadman_switch_key_init(self, args): #rpc_client, key_file, blockchain, test_or_reg_network, txfee, change_address, debug, verbose):
+        self.rpc_client = args[0]
+        self.filepath = args[1]
+        self.blockchain = args[2]
+        self.test_or_reg_network = args[3]
+        self.txfee = args[4]
+        self.change_address = args[5]
+        self.debug = args[6]
+        self.verbose = args[7]
+
+        if not os.path.isfile(self.filepath):
+            raise Exception("%s is not a regular file!" % self.filepath)
+
+        if self.txfee < 0.0:
+            raise Exception("txfee may not be less than 0!: %.8f" % txfee)
+
+        key_lines = None
+        with open(self.filepath, 'r') as f:
+            key_lines = f.readlines()
+
+        # Ensure that we read exactly four lines.
+        if len(key_lines) != 4:
+            raise Exception("Key file does not have 4 lines (" + len(key_lines) + ").  It appears to be corrupted.")
+
+        # Decode each of the four lines and add them to the bytes to publish.
+        self.file_bytes = binascii.unhexlify(key_lines[0].strip())
+        self.file_bytes += binascii.unhexlify(key_lines[1].strip())
+        self.file_bytes += binascii.unhexlify(key_lines[2].strip())
+        self.file_bytes += binascii.unhexlify(key_lines[3].strip())
+        self.filesize = len(self.file_bytes)
+
+        # Ensure that we read exactly 128 bytes.
+        if self.filesize != 128:
+            raise Exception("Decoded key file does not yield 128 bytes!.  It appears to be corrupted.")
+
+        self.num_outputs = 1
+        self.num_bytes_per_tx = Publication.SINGLE_OUTPUT_SIZE
+        self.general_flags = Publication.GENERAL_FLAG_DEADMAN_SWITCH_KEY
+        self.content_type = Publication.CONTENT_TYPE_UNDEFINED
+        self.compression_type = Publication.COMPRESSION_TYPE_NONE
+        self.encryption_type = Publication.ENCRYPTION_TYPE_NONE
+        self.file_hash = b'\x00' * 32
+        self.filename = ''
+        self.file_description = ''
+        self.txrecords = []
+        self.bytes_unconfirmed = 0
+        self.end_of_file_reached = False
+        self.temporal_key = None
+        self.temporal_iv = None
+        self.temporal_extra = None
+        self.deadman_switch_path = None
+
+        # We generate a new address for each publication.  This is the one
+        # legit key used to spend coins sent during each transaction.
+        self.address = self.rpc_client.getnewaddress()
+
+        # To sign raw transactions, we need the address's private key.
+        self.privkey = self.rpc_client.dumpprivkey(self.address)
+        self.d("Private key for publishing: %s" % self.privkey)
+
+        # To create a P2SH address, we need to the raw ECDSA public key from
+        # the address.
+        self.pubkey = self.rpc_client.validateaddress(self.address)['pubkey']
+        self.d("Public key for publishing: %s" % self.pubkey)
+
+        # Set a flag that denotes we are trying to publish a deadman switch key.
+        self.deadman_switch_key_publish_mode = True
+
+
+    # Prints a message when debugging is enabled.
     def d(self, s):
         if self.debug:
             print(s)
 
 
+    # Prints a message when verbosity is enabled.
     def v(self, s):
         if self.verbose:
             print(s)
@@ -434,17 +513,11 @@ class Publication:
         with open(self.deadman_switch_path, 'w') as f:
             f.write(next_txid)
             f.write("\n")
-            f.write(binascii.hexlify(self.temporal_key).decode('utf-8'))
+            f.write(binascii.hexlify(self.temporal_key).decode('ascii'))
             f.write("\n")
-            f.write(binascii.hexlify(self.temporal_iv).decode('utf-8'))
+            f.write(binascii.hexlify(self.temporal_iv).decode('ascii'))
             f.write("\n")
-            f.write(binascii.hexlify(self.temporal_extra).decode('utf-8'))
-
-        # Remove the key information so that it is not written into the
-        # blockchain during the normal publication process.
-        self.temporal_key = b'\xff' * 32
-        self.temporal_iv = b'\xff' * 32
-        self.temporal_extra = b'\xff' * 32
+            f.write(binascii.hexlify(self.temporal_extra).decode('ascii'))
 
         self.deadman_switch_wrote_key = True
 
@@ -456,7 +529,7 @@ class Publication:
         self.v('Beginning to publish %s using %d outputs per transaction / %d bytes per transaction.' % (self.filepath, self.num_outputs, self.num_bytes_per_tx))
 
         num_transactions = math.ceil(self.filesize / self.num_bytes_per_tx)
-        self.v('%s is %d bytes long.  Publication will take %d transactions, which, under optimal conditions, will take %s.' % (self.filepath, self.filesize, num_transactions, Publication.get_time_estimate(num_transactions, self.blockchain)))         
+        self.v('%s is %d bytes long.  Publication will take %d transactions, which, under optimal conditions, will take %s.' % (self.filepath, self.filesize, num_transactions, Publication.get_time_estimate(num_transactions, self.blockchain)))
 
         # 8 bytes to denote the start of a file
         # 8 bytes for nonce
@@ -488,7 +561,7 @@ class Publication:
             self.filename.encode('utf-8') + \
             self.file_description.encode('utf-8')
 
-        self.d("Header bytes: %s" % binascii.hexlify(header_bytes).decode('utf-8'))
+        self.d("Header bytes: %s" % binascii.hexlify(header_bytes).decode('ascii'))
 
         # Read the first bytes out of the file.  Since we have to include a
         # header, subtract those bytes from the single output size.
@@ -528,6 +601,12 @@ class Publication:
         # TXID, vout_nums point to user's transaction to script.  TxRecord has
         # redeem script for next transaction.
         continue_flag = True
+
+        # If we are trying to publish a deadman switch key, set end_of_file_reached to True in order to skip the
+        # termination message, which isn't necessary.
+        if self.deadman_switch_key_publish_mode:
+            self.end_of_file_reached = True
+
         while continue_flag:
             self.d("Sending redeemscripts in: %s" % txrecord)
             next_txrecord = self.resume(txrecord)
@@ -576,15 +655,25 @@ class Publication:
             self.end_of_file_reached = True
             self.d("Reached end of file.  Finalizing publication...")
 
+            key = self.temporal_key
+            iv = self.temporal_iv
+            extra = self.temporal_extra
+
+            # If the deadman switch is enabled, overwrite the key information.
+            if self.deadman_switch_path is not None:
+                key = b'\xff' * 32
+                iv = b'\xff' * 32
+                extra = b'\xff' * 32
+
             header_termination_bytes = Publication.HEADER_TERMINATE + \
                 struct.pack('!I', 1) + \
                 struct.pack('!B', self.encryption_type) + \
                 b'\x00\x00\x00' + \
-                self.temporal_key + \
-                self.temporal_iv + \
-                self.temporal_extra
+                key + \
+                iv + \
+                extra
 
-            self.d("\nTermination bytes: %s" % binascii.hexlify(header_termination_bytes))
+            self.d("\nTermination bytes: %s" % binascii.hexlify(header_termination_bytes).decode('ascii'))
             
             redeem_script, p2sh_address = self.make_redeem_script(header_termination_bytes)
             redeem_scripts.append(redeem_script)
@@ -608,11 +697,10 @@ class Publication:
             if file_pos + bytes_to_read > self.filesize:
                 bytes_to_read = self.filesize - file_pos
 
-
             file_offset = struct.pack('!I', file_pos)
 
             next_block = file_offset + self.file_bytes[file_pos:file_pos + bytes_to_read]
-            self.d("Next block: %s" % binascii.hexlify(next_block))
+            self.d("Next block: %s" % binascii.hexlify(next_block).decode('ascii'))
 
             next_block_len = len(next_block)
             noutputs = int(min(self.num_outputs, math.ceil(next_block_len / Publication.SINGLE_OUTPUT_SIZE)))
@@ -704,7 +792,7 @@ class Publication:
             stuff['txid'] = txid
             stuff['vout'] = vout_nums[i]
             stuff['scriptPubKey'] = output_scripts[i]
-            stuff['redeemScript'] = binascii.hexlify(txrecord.redeem_scripts[i]).decode('utf-8')
+            stuff['redeemScript'] = binascii.hexlify(txrecord.redeem_scripts[i]).decode('ascii')
             stuffs.append(stuff)
 
         signed_raw_tx = self.rpc_client.signrawtransaction(unsigned_raw_tx, stuffs, self.privkey)
