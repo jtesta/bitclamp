@@ -39,6 +39,50 @@ def exit_handler(publication):
         os.unlink(publication.state_file)
 
 
+# Returns the config file ("/home/currentuser/.bitcoin/bitcoin.conf" or
+# "/home/currentuser/.dogecoin/dogecoin.conf") for the specified chain.
+def get_config_file(chain):
+    from os.path import expanduser
+
+    conf_file = "%s/.bitcoin/bitcoin.conf" % expanduser("~")
+    if chain == Publication.BLOCKCHAIN_DOGE:
+        conf_file = "%s/.dogecoin/dogecoin.conf" % expanduser("~")
+
+    return conf_file
+
+
+# Parses the ~/.bitcoin/bitcoin.conf or ~/.dogecoin/dogecoin.conf file for RPC
+# credentials.  Returns the RPC hostname, username, password, and port.
+def parse_config(conf_file):
+    rpchost = rpcuser = rpcpassword = rpcport = None
+
+    # Read in the entire config file.
+    conf_lines = None
+    with open(conf_file, 'r') as f:
+        conf_lines = f.readlines()
+
+    # Parse each line in the config file.
+    for line in conf_lines:
+        # Split each line into a key/value pair.
+        kv = line.split('=')
+        if len(kv) != 2:
+            continue
+
+        key = kv[0].strip()
+        val = kv[1].strip()
+
+        if key.startswith('rpchost'):
+            rpchost = val
+        elif key.startswith('rpcuser'):
+            rpcuser = val
+        elif key.startswith('rpcpassword'):
+            rpcpass = val
+        elif key.startswith('rpcport'):
+            rpcport = int(val)
+
+    return rpchost, rpcuser, rpcpass, rpcport
+
+
 parser = argparse.ArgumentParser()
 
 # (Mostly) required arguments.
@@ -175,6 +219,22 @@ rpcport = xrpcport
 rpcuser = xrpcuser
 rpcpass = xrpcpass
 
+# If no RPC user or password was given, try to parse the config file
+# (i.e.: ~/.bitcoin/bitcoin.conf or ~/.dogecoin/dogecoin.conf).
+if (xrpcuser == '') or (xrpcpass == ''):
+    config_file = get_config_file(chain)
+
+    rpchost, rpcuser, rpcpass, rpcport = parse_config(config_file)
+    rpchost = rpchost if rpchost != None else 'localhost'
+
+    if (rpcuser is None) or (rpcpass is None):
+        print("Error: config file (%s) not found, and --rpcXXX options not set." % config_file)
+        sys.exit(-1)
+
+    d('Read from %s: rpchost: %s, rpcuser: %s, rpcpass: %s**********, rpcport: %s' % (config_file, rpchost, rpcuser, rpcpass[:3], rpcport))
+
+
+# Create a connection to the RPC server.
 rpc_client = RPCClient(rpchost, rpcport, rpcuser, rpcpass)
 
 

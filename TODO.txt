@@ -8,8 +8,6 @@
 
 * Check if all compression programs are available at run time.
 
-* Automatically parse bitcoin.conf/dogecoin.conf file for RPC server credentials.
-
 * Implement parallel transactions.
 
 * Migrate from polling RPC server during publication to a callback architecture.
