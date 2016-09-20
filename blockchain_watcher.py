@@ -282,7 +282,7 @@ if __name__ == '__main__':
                         else:
                             partial_file.set_previous_txid(txid)
 
-                            if file_offset == -1:
+                            if (file_offset == -1) and (len(data) > 4):
                                 file_offset = struct.unpack('!I', data[0:4])[0]
                                 data = data[4:]
 
