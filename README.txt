@@ -41,6 +41,6 @@ Currently, the only way to extract content from the blockchain is to run bitcoin
 
 To monitor the blockchain in realtime, run bitcoind/dogecoind with the following arguments:
 
-    bitcoind -txindex -rpcuser=bitcoin -rpcpassword=supercalifragilistic -rpcport=8889 -regtest -daemon -listen=0 -blocknotify="python3 /path/to/bitclamp/blockchain_watcher.py localhost 8889 bitcoin pewp /path/to/output/directory/ /path/to/output_log.txt %s"
+    bitcoind -txindex -rpcuser=bitcoin -rpcpassword=supercalifragilistic -rpcport=8889 -regtest -daemon -listen=0 -blocknotify="python3 /path/to/bitclamp/blockchain_watcher.py localhost 8889 bitcoin supercalifragilistic /path/to/output/directory/ /path/to/output_log.txt %s"
 
 And that's it.  The server will dump new files into /path/to/output/directory/.
