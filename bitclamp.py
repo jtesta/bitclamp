@@ -307,7 +307,7 @@ if txfee is None or txfee < 0:
 
 # An address for any leftover change is mandatory when publishing.
 if change_address is None or change_address is "":
-    print("Error: --change-address must be specified!")
+    print("Error: --change must be specified!")
     sys.exit(-1)
 
 # Validate the change address.
@@ -318,6 +318,10 @@ if is_valid != True:
 
 # If the user wants to publish a deadman switch key, lets handle that now.
 if deadman_switch_publish is not None:
+
+    if filepath is not None:
+        print("Warning: --file and --deadman-switch-publish are incompatible.  Ignoring the --file argument and continuing...")
+
     publication = Publication(rpc_client, deadman_switch_publish, chain, testnet or regtest, txfee, change_address, debug, verbose)
     publication.begin()
     sys.exit(0)
