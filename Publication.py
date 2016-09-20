@@ -168,8 +168,8 @@ class Publication:
 
         # The number of bytes published per transaction.  This is not valid for
         # the header or termination transactions; only the bulk intermediate
-        # ones.  44 bytes for those are needed for the intermediate header data.
-        self.num_bytes_per_tx = (self.num_outputs * Publication.SINGLE_OUTPUT_SIZE) - 44
+        # ones.  Four bytes are subtracted to account for the file offset.
+        self.num_bytes_per_tx = (self.num_outputs * Publication.SINGLE_OUTPUT_SIZE) - 4
 
         # The amount we have to publish with.  This gets whittled down each
         # transaction by fees.  Any leftover is sent back to the user as change

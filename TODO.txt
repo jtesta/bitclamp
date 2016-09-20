@@ -20,6 +20,4 @@
 
 * Add code to retransmit transaction if it is not confirmed after X blocks.
 
-* Test publication with self.num_bytes_per_tx set with +44.
-
 * Add a process to closely monitor unconfirmed transactions for deadman switch keys.
