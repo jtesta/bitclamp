@@ -536,6 +536,7 @@ class Publication:
         # 32 bytes for nonce hash
         # 2 bytes reserved (0x0000)
         # 1 byte for general flags
+        # 1 byte for encryption type
         # 1 byte for the content type
         # 1 byte for the compression type
         # 4 bytes for the file size
@@ -552,6 +553,7 @@ class Publication:
             nonce_hash + \
             b'\x00\x00' + \
             struct.pack('!B', self.general_flags) + \
+            struct.pack('!B', self.encryption_type) + \
             struct.pack('!B', self.content_type) + \
             struct.pack('!B', self.compression_type) + \
             struct.pack('!I', self.filesize) + \
@@ -665,10 +667,15 @@ class Publication:
                 iv = b'\xff' * 32
                 extra = b'\xff' * 32
 
+            # 8 bytes to denote the end of the file
+            # 4 bytes to denote the number of parallel transactions
+            # 4 reserved bytes
+            # 32 bytes for the temporal encryption key
+            # 32 bytes for the temporal IV (currently not used)
+            # 32 bytes for extra encryption data (currently not used)
             header_termination_bytes = Publication.HEADER_TERMINATE + \
                 struct.pack('!I', 1) + \
-                struct.pack('!B', self.encryption_type) + \
-                b'\x00\x00\x00' + \
+                b'\x00\x00\x00\x00' + \
                 key + \
                 iv + \
                 extra

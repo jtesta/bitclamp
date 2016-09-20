@@ -60,7 +60,7 @@ def decrypt_deadman_switch_file(data):
     for partial_file in partial_files:
         if txid_hex == partial_file.initial_txid:
             partial_file.debug_func = d
-            return partial_file.finalize(None, None, key)
+            return partial_file.finalize(None, key)
 
     log('Failed to find a matching deadman switch file with TXID: %s' % txid_hex)
     return False
@@ -162,7 +162,7 @@ if __name__ == '__main__':
                         if n == 14:
                             break
 
-                    if len(data) < 90:
+                    if len(data) < 92:
                         continue
 
 
@@ -189,28 +189,28 @@ if __name__ == '__main__':
                     reserved = data[ptr:ptr + 2]
                     ptr += 2
 
-                    # general flags, content, compression, file_size
-                    gccfs = data[ptr:ptr + 7]
-                    ptr += 7
+                    # general flags, encryption, content, compression, file_size
+                    geccfs = data[ptr:ptr + 8]
+                    ptr += 8
 
-                    general_flags, content_type, compression_type, file_size = struct.unpack('!BBBI', gccfs)
+                    general_flags, encryption_type, content_type, compression_type, file_size = struct.unpack('!BBBBI', geccfs)
                     file_hash = data[ptr:ptr + 32]
                     ptr += 32
 
                     # filename length, description length
                     fldl = data[ptr:ptr + 2]
                     ptr += 2
-                    filename_len, description_len =  struct.unpack('!BB', fldl)
+                    filename_len, description_len = struct.unpack('!BB', fldl)
                     filename_len = min(filename_len, 128)
                     description_len = min(description_len, 128)
 
                     filename = ''
                     description = ''
-                    if filename_len > 0 and ptr + filename_len < len(data):
+                    if (filename_len > 0) and ((ptr + filename_len) < len(data)):
                         filename = data[ptr:ptr + filename_len].decode('utf-8')
                         ptr += filename_len
 
-                    if description_len > 0 and ptr + description_len < len(data):
+                    if (description_len > 0) and ((ptr + description_len) < len(data)):
                         description = data[ptr:ptr + description_len].decode('utf-8')
                         ptr += description_len
 
@@ -222,7 +222,7 @@ if __name__ == '__main__':
                     # manual replacement just to be extra sure.
                     sanitized_filename = os.path.basename(filename).replace('\\', '').replace('/', '')
 
-                    partial_file = PartialFile(d, txid, output_dir, partial_dir, sanitized_filename, description, file_size, general_flags, content_type, compression_type, file_hash)
+                    partial_file = PartialFile(d, txid, output_dir, partial_dir, sanitized_filename, description, file_size, general_flags, encryption_type, content_type, compression_type, file_hash)
 
                     # Is this a deadman switch key?  If so, ensure that the
                     # payload has at least 128 bytes (it should be exactly 128,
@@ -250,13 +250,12 @@ if __name__ == '__main__':
                         partial_file = interesting_txids[vin_txid]
 
                         # Is this the termination data?
-                        if data.find(Publication.HEADER_TERMINATE) == 0:
+                        if (data.find(Publication.HEADER_TERMINATE) == 0) and (len(data) >= (len(Publication.HEADER_TERMINATE) + 4 + 4 + 32 + 32 + 32)):
                             data = data[len(Publication.HEADER_TERMINATE):]
                             num_parallel_txs = struct.unpack('!I', data[0:4])[0]
-                            encryption_type = struct.unpack('!B', data[4:5])[0]
 
                             # Not currently used.
-                            reserved = data[5:8]
+                            reserved = data[4:8]
 
                             # This is the temporal key.  It is all zeros if
                             # encryption was disabled, or all ones if in
@@ -267,7 +266,7 @@ if __name__ == '__main__':
                             temporal_iv = data[40:72]
                             temporal_extra = data[72:104]
 
-                            if partial_file.finalize(num_parallel_txs, encryption_type, temporal_key):
+                            if partial_file.finalize(num_parallel_txs, temporal_key):
                                 log("Successfully retrieved file: %s" % partial_file)
                             else:
                                 log("Failed to retrieve file: %s" % partial_file)

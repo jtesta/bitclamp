@@ -19,7 +19,7 @@
 import binascii, hashlib, mmap, os, pickle
 
 class PartialFile:
-   def __init__(self, debug_func, initial_txid, output_dir, partial_dir, sanitized_filename, description, file_size, general_flags, content_type, compression_type, file_hash):
+   def __init__(self, debug_func, initial_txid, output_dir, partial_dir, sanitized_filename, description, file_size, general_flags, encryption_type, content_type, compression_type, file_hash):
       self.debug_func = debug_func
       self.initial_txid = initial_txid
       self.output_dir = output_dir
@@ -27,6 +27,7 @@ class PartialFile:
       self.description = description
       self.file_size = file_size
       self.general_flags = general_flags
+      self.encryption_type = encryption_type
       self.content_type = content_type
       self.compression_type = compression_type
       self.file_hash = file_hash
@@ -38,7 +39,6 @@ class PartialFile:
       self.block_acks = {}
       self.previous_txid = self.initial_txid
       self.temporal_key = None
-      self.encryption_type = 0
       self.num_parallel_txs = -1
       self.finalized = False
 
@@ -148,7 +148,7 @@ class PartialFile:
    # in the partial directory.
    #
    # Returns True on success, or False on error.
-   def finalize(self, num_parallel_txs, encryption_type, temporal_key):
+   def finalize(self, num_parallel_txs, temporal_key):
       from Publication import Publication
       from Utils import Utils
 
@@ -157,9 +157,6 @@ class PartialFile:
       # previously.
       if num_parallel_txs is None:
          num_parallel_txs = self.num_parallel_txs
-      if encryption_type is None:
-         self.d('encryption_type is None, so setting to %d' % self.encryption_type)
-         encryption_type = self.encryption_type
 
       # If not all bytes were received, this is a failure.
       if (not self.is_complete()) and (not self.is_complete_deadman_switch_file()):
@@ -167,7 +164,7 @@ class PartialFile:
          return False
 
       # Update the temporal key, if there is one.
-      if (encryption_type != Publication.ENCRYPTION_TYPE_NONE) and \
+      if (self.encryption_type != Publication.ENCRYPTION_TYPE_NONE) and \
          (temporal_key != (b'\x00' * 32)):
          self.temporal_key = temporal_key
 
@@ -190,7 +187,6 @@ class PartialFile:
          # Save the num_parallel_txs and encryption_type so that when the key
          # is found in the future, we know how to decrypt this.
          self.num_parallel_txs = num_parallel_txs
-         self.encryption_type = encryption_type
          self.save_state()
          return True
 
@@ -198,8 +194,8 @@ class PartialFile:
       new_file_path = PartialFile.get_unique_filepath(self.initial_txid, self.output_dir, self.sanitized_filename)
 
       # Decrypt the file, if necessary.
-      if encryption_type == Publication.ENCRYPTION_TYPE_GPG2_AES256_SHA512:
-         self.d("File is encrypted with type %s.  Decrypting..." % Publication.get_encryption_str(encryption_type))
+      if self.encryption_type == Publication.ENCRYPTION_TYPE_GPG2_AES256_SHA512:
+         self.d("File is encrypted with type %s.  Decrypting..." % Publication.get_encryption_str(self.encryption_type))
          file_bytes = Utils.decrypt(file_bytes, self.temporal_key)
          if len(file_bytes) == 0:
             self.d("Decryption of file yielded zero bytes!")
@@ -240,7 +236,7 @@ class PartialFile:
       if self.temporal_key is not None:
          s = "Temporal Key: %s\n" % binascii.hexlify(self.temporal_key).decode('ascii')
 
-      return "PartialFile:\n\tInitial TXID: %s\n\tSanitized filename: %s\n\tDescription: %s\n\tFile size: %d\n\tContent type: %s\n\tCompression type: %s\n\t%s\n\tFile hash: %s\n\tFile pointer: %d\n\tACK Window: %s\n\t%s\n\tIs deadman switch file: %s\n\tIs deadman switch key: %s\n\tIs complete deadman switch file: %r\n\tIs complete: %r\n" % (self.initial_txid, self.sanitized_filename, self.description, self.file_size, Publication.get_content_str(self.content_type), Publication.get_compression_str(self.compression_type), general_flags_str, binascii.hexlify(self.file_hash).decode('ascii'), self.file_ptr, self.block_acks, s, self.is_deadman_switch_file(), self.is_deadman_switch_key(), self.is_complete_deadman_switch_file(), self.is_complete())
+      return "PartialFile:\n\tInitial TXID: %s\n\tSanitized filename: %s\n\tDescription: %s\n\tFile size: %d\n\tEncryption type: %s\n\tContent type: %s\n\tCompression type: %s\n\t%s\n\tFile hash: %s\n\tFile pointer: %d\n\tACK Window: %s\n\t%s\n\tIs deadman switch file: %s\n\tIs deadman switch key: %s\n\tIs complete deadman switch file: %r\n\tIs complete: %r\n" % (self.initial_txid, self.sanitized_filename, self.description, self.file_size, Publication.get_encryption_str(self.encryption_type), Publication.get_content_str(self.content_type), Publication.get_compression_str(self.compression_type), general_flags_str, binascii.hexlify(self.file_hash).decode('ascii'), self.file_ptr, self.block_acks, s, self.is_deadman_switch_file(), self.is_deadman_switch_key(), self.is_complete_deadman_switch_file(), self.is_complete())
 
 
    # Return a unique filepath to use for a new file, based on the TXID and
