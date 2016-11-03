@@ -71,7 +71,7 @@ def decrypt_deadman_switch_file(partial_files, data):
 
 # Processes a block by inspecting its transactions and parsing any included
 # data.
-def handle_block(current_block_hash, current_block = None):
+def handle_block(current_block_num, current_block_hash, current_block = None):
 
     # If the parsed block wasn't provided, parse it now.
     if current_block is None:
@@ -186,7 +186,7 @@ def handle_block(current_block_hash, current_block = None):
                     # manual replacement just to be extra sure.
                     sanitized_filename = os.path.basename(filename).replace('\\', '').replace('/', '')
 
-                    partial_file = PartialFile(d, txid, output_dir, partial_dir, sanitized_filename, description, file_size, general_flags, encryption_type, content_type, compression_type, file_hash)
+                    partial_file = PartialFile(d, txid, output_dir, partial_dir, sanitized_filename, description, file_size, general_flags, encryption_type, content_type, compression_type, file_hash, current_block_num)
 
                     # Is this a deadman switch key?  If so, ensure that the
                     # payload has at least 128 bytes (it should be exactly 128,
@@ -200,7 +200,7 @@ def handle_block(current_block_hash, current_block = None):
                     else:
                         log("Discovered publication: %s" % partial_file)
 
-                        partial_file.write_data(data, 0)
+                        partial_file.write_data(data, 0, current_block_num)
                         partial_file.save_state()
                         partial_file = None
 
@@ -289,7 +289,7 @@ def handle_block(current_block_hash, current_block = None):
         if file_offset >= 0 and bytes_to_write != b'' and \
            partial_file is not None:
             d("Writing %d bytes to offset %d: %s" % (len(bytes_to_write), file_offset, binascii.hexlify(bytes_to_write)))
-            partial_file.write_data(bytes_to_write, file_offset)
+            partial_file.write_data(bytes_to_write, file_offset, current_block_num)
             partial_file.save_state()
 
 
@@ -376,7 +376,7 @@ if __name__ == '__main__':
     # If the lockfile is empty, handle this block and initialize the lockfile.
     if len(lock_data) == 0:
         d("Lock data is empty.  Initializing.")
-        handle_block(current_block_hash, current_block)
+        handle_block(current_block_num, current_block_hash, current_block)
         block_info = {'last_block_num_processed': current_block_num}
 
     # The lockfile has data, so load it.
@@ -397,7 +397,7 @@ if __name__ == '__main__':
         # process it.
         else:
             d("Handling in-order block: %d / %s" % (current_block_num, current_block_hash))
-            handle_block(current_block_hash, current_block)
+            handle_block(current_block_num, current_block_hash, current_block)
             block_info['last_block_num_processed'] = current_block_num
 
             # Check if the next block number is stored.  If so, we can process
@@ -406,7 +406,7 @@ if __name__ == '__main__':
             while next_block_num in block_info:
                 next_block_hash = block_info[next_block_num]
                 d("Handling next block: %d / %s" % (next_block_num, next_block_hash))
-                handle_block(next_block_hash)
+                handle_block(next_block_num, next_block_hash)
 
                 # Since we handled this block, we no longer need to track it.
                 del(block_info[next_block_num])

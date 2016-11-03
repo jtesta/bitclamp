@@ -19,7 +19,7 @@
 import binascii, hashlib, mmap, os, pickle
 
 class PartialFile:
-   def __init__(self, debug_func, initial_txid, output_dir, partial_dir, sanitized_filename, description, file_size, general_flags, encryption_type, content_type, compression_type, file_hash):
+   def __init__(self, debug_func, initial_txid, output_dir, partial_dir, sanitized_filename, description, file_size, general_flags, encryption_type, content_type, compression_type, file_hash, initial_block_num):
       self.debug_func = debug_func
       self.initial_txid = initial_txid
       self.output_dir = output_dir
@@ -31,6 +31,12 @@ class PartialFile:
       self.content_type = content_type
       self.compression_type = compression_type
       self.file_hash = file_hash
+
+      # The block number that this was initially found in.
+      self.initial_block_num = initial_block_num
+
+      # The block number of the last write operation.
+      self.last_write_block_num = initial_block_num
 
       self.file_path = PartialFile.get_unique_filepath(initial_txid, partial_dir, sanitized_filename)
       self.state_file = self.file_path + '.state'
@@ -67,12 +73,17 @@ class PartialFile:
 
 
    # Write data from the blockchain into the local file.
-   def write_data(self, data, offset):
+   def write_data(self, data, offset, block_num):
       if offset > self.file_size:
          raise Exception("Offset (%d) is larger than file size (%d)!" % (offset, self.file_size))
       elif offset < 0:
          raise Exception("Offset is negative!: %d" % offset)
+      elif len(data) == 0:
+         raise Exception("Data length is 0!")
 
+      # Update the block number of the last write operation.
+      if block_num > self.last_write_block_num:
+         self.last_write_block_num = block_num
 
       if offset + len(data) > self.file_size:
          truncated_len = self.file_size - offset
@@ -233,7 +244,7 @@ class PartialFile:
       if self.temporal_key is not None:
          s = "Temporal Key: %s\n" % binascii.hexlify(self.temporal_key).decode('ascii')
 
-      return "PartialFile:\n\tInitial TXID: %s\n\tSanitized filename: %s\n\tDescription: %s\n\tFile size: %d\n\tEncryption type: %s\n\tContent type: %s\n\tCompression type: %s\n\t%s\n\tFile hash: %s\n\tFile pointer: %d\n\tACK Window: %s\n\t%s\n\tIs deadman switch file: %s\n\tIs deadman switch key: %s\n\tIs complete deadman switch file: %r\n\tIs complete: %r\n" % (self.initial_txid, self.sanitized_filename, self.description, self.file_size, Publication.get_encryption_str(self.encryption_type), Publication.get_content_str(self.content_type), Publication.get_compression_str(self.compression_type), general_flags_str, binascii.hexlify(self.file_hash).decode('ascii'), self.file_ptr, self.block_acks, s, self.is_deadman_switch_file(), self.is_deadman_switch_key(), self.is_complete_deadman_switch_file(), self.is_complete())
+      return "PartialFile:\n\tInitial TXID: %s\n\tSanitized filename: %s\n\tDescription: %s\n\tFile size: %d\n\tEncryption type: %s\n\tContent type: %s\n\tCompression type: %s\n\t%s\n\tFile hash: %s\n\tFile pointer: %d\n\tACK Window: %s\n\t%s\n\tInitial block number: %d\n\tBlock number of last write: %d\n\tIs deadman switch file: %s\n\tIs deadman switch key: %s\n\tIs complete deadman switch file: %r\n\tIs complete: %r\n" % (self.initial_txid, self.sanitized_filename, self.description, self.file_size, Publication.get_encryption_str(self.encryption_type), Publication.get_content_str(self.content_type), Publication.get_compression_str(self.compression_type), general_flags_str, binascii.hexlify(self.file_hash).decode('ascii'), self.file_ptr, self.block_acks, s, self.initial_block_num, self.last_write_block_num, self.is_deadman_switch_file(), self.is_deadman_switch_key(), self.is_complete_deadman_switch_file(), self.is_complete())
 
 
    # Return a unique filepath to use for a new file, based on the TXID and
