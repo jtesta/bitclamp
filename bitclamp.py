@@ -13,11 +13,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import argparse, atexit, pickle, sys
+import argparse, pickle, signal, sys
 
 from Publication import *
 from RPCClient import *
 
+publication = None
 
 # Prints a message if in debug mode.
 def d(s):
@@ -25,18 +26,28 @@ def d(s):
         print(s)
 
 
-# The exit function for this program.  Responsible for saving the state of
-# an ongoing publication.
-def exit_handler(publication):
+# Prints a message if in verbose mode.
+def v(s):
+    if verbose:
+        print(s)
+
+
+# The signal function for this program.  Responsible for saving the state of
+# an ongoing publication whenever the user presses control-C (SIGINT) or SIGTERM
+# is received.
+def signal_handler(signum, frame):
+
     # If the publication is not complete, and funds were received, save its
     # state.
-    if not publication.complete and publication.received_funds:
+    if not publication.complete:
         with open(publication.state_file, 'wb') as f:
             pickle.dump(publication, f, pickle.HIGHEST_PROTOCOL)
 
     # If the publication is complete, delete its state file.
     elif os.path.exists(publication.state_file):
         os.unlink(publication.state_file)
+
+    exit(0)
 
 
 # Returns the config file ("/home/currentuser/.bitcoin/bitcoin.conf" or
@@ -55,6 +66,10 @@ def get_config_file(chain):
 # credentials.  Returns the RPC hostname, username, password, and port.
 def parse_config(conf_file):
     rpchost = rpcuser = rpcpassword = rpcport = None
+
+    if not os.path.isfile(conf_file):
+        print("Error: could not find config file: %s" % conf_file)
+        sys.exit(-1)
 
     # Read in the entire config file.
     conf_lines = None
@@ -95,6 +110,7 @@ parser.add_argument('--estimate', help='estimate the cost to publish the file', 
 
 # Publication options.
 parser.add_argument('--noutputs', help='number of outputs per transaction (default: 5)', default=5)
+parser.add_argument('--ntransactions', help='number of concurrent transactions (default: 1).  Not useful for BTC publishing, but very, very useful to increase for DOGE.', default=1)
 parser.add_argument('--chain', help='the blockchain to use ("btc" or "doge"; default: "btc")', default='btc')
 parser.add_argument('--name', help='the filename to publish as.  If unspecified, the filename in --file is used.  To omit the filename in the publication, use "" here.')
 parser.add_argument('--description', help='an optional description of this file', default='')
@@ -120,6 +136,9 @@ parser.add_argument('--rpcport', help='the port of the Bitcoin RPC server to use
 parser.add_argument('--rpcuser', help='the username to authenticate as against the Bitcoin RPC server', default='')
 parser.add_argument('--rpcpass', help='the password to authenticate as against the Bitcoin RPC server', default='')
 
+# Hidden options for unit testing.
+parser.add_argument('--unittest-publication-address', help=argparse.SUPPRESS, default=None)
+
 args = vars(parser.parse_args())
 
 # Read command line arguments.
@@ -127,6 +146,7 @@ verbose = args['verbose']
 debug = args['debug']
 filepath = args['file']
 num_outputs = int(args['noutputs'])
+num_transactions = int(args['ntransactions'])
 chain = args['chain']
 testnet = args['testnet']
 regtest = args['regtest']
@@ -144,6 +164,7 @@ restore = args['restore']
 deadman_switch_save = args['deadman_switch_save']
 deadman_switch_publish = args['deadman_switch_publish']
 
+unittest_publication_address = args['unittest_publication_address']
 
 xrpchost = args['rpchost']
 xrpcport = int(args['rpcport'])
@@ -163,44 +184,40 @@ if restore is not None:
     with open(restore, 'rb') as f:
         publication = pickle.load(f)
 
-    # Register the state-saving exit handler.
-    atexit.register(exit_handler, publication)
+    # Register the state-saving signal handlers.
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
-    if verbose:
-        d("Restoring publication:")
-        d(publication)
-        d("\nUpdating confirmations...")
+    v("Restoring publication:")
+    v(publication)
 
     # Update the number of confirmations for all sent transactions.
-    publication.update_confirmations(True)
+    v("Updating confirmations...")
+    publication.update_confirmations(False, True)
+
+    # Go through the latest TxRecords.  If they have zero confirmations,
+    # re-transmit them and wait for at least one confirmation.
+    txrecords_to_retransmit = []
+    for generation in range(0, len(publication.txrecords)):
+        previous_txrecord = publication.txrecords[generation][-2]
+        txrecord = publication.txrecords[generation][-1]
+        if txrecord.get_confirmations() == 0:
+            txrecords_to_retransmit.append(([previous_txrecord], [txrecord]))
+
+    if len(txrecords_to_retransmit) > 0:
+        v("Re-transmitting %d TxRecords..." % len(txrecords_to_retransmit))
+        publication.transmit_txrecords(txrecords_to_retransmit)
+
+    # Check if the publication is already complete.
     if publication.complete:
         print("Publication complete!")
 
         # The exit handler will delete the state file.
         sys.exit(0)
 
-    txrecord = publication.txrecords[-1]
-    d("Last TxRecord: %s" % txrecord)
-
-    if txrecord.get_confirmations() == 0:
-        if not publication.wait_for_confirmation(txrecord, None):
-            print("wait_for_confirmation() failed!")
-
-
-    continue_flag = True
-    while continue_flag:
-        next_txrecord = publication.resume(txrecord)
-        if not publication.wait_for_confirmation(next_txrecord, None):
-            print("wait_for_confirmation() failed!")
-
-        txrecord = next_txrecord
-
-        if publication.change_sent is True:
-            next_txrecord.set_last_record()
-            continue_flag = False
-
-
-    print("Publication complete!")
+    # Now that all the latest TxRecords have at least one confirmation,
+    # continue publishing the rest of the file.
+    publication.resume()
     sys.exit(0)
 
 
@@ -250,6 +267,10 @@ if (num_outputs < 1) or (num_outputs > 20):
     print("Error: the number of outputs must be between 1 and 20.")
     sys.exit(-1)
 
+# More self-documenting code.  :D
+if (num_transactions < 1) or (num_transactions > 100):
+    print("Error: the number of transactions must be between 1 and 100.")
+    sys.exit(-1)
 
 # If --estimate was given, but no file was specified...
 if estimate is True and filepath is None:
@@ -294,19 +315,18 @@ if deadman_switch_publish is None:
 
 # If --estimate was given, and the user gave the file to estimate with...
 if estimate is True:
-    cost, time, ntxs, size, fee = Utils.get_estimate(rpc_client, filepath, chain, num_outputs, txfee)
+    publication_amount, transaction_fees, refundable_amount, multiplier, time, nblockgens, size, fee_rate = Utils.get_estimate(rpc_client, filepath, chain, num_outputs, num_transactions, txfee)
     chainstr = "BTC" if chain == Publication.BLOCKCHAIN_BTC else "DOGE"
-    print("To publish %s (%s) on the %s network with a transaction fee of %f, the cost will be %f %s.  The %d transactions will take about %s." % (filepath, size, chainstr, fee, cost, chainstr, ntxs, time))
-
+    print("To publish %s (%s) on the %s network with a transaction fee rate of %.8f, the amount needed to begin publishing is %.8f %s.  Of this figure, %.8f will be lost to transaction fees, and %.8f will be sent between transactions.  Based on the size of the file, an extra %d%% is added to account for variability in the transaction sizes (larger files will have less added than smaller ones).  Because any and all unused funds are refunded upon completion, the true publication cost should be closer to the transaction fee cost (%.8f).  With %d concurrent transactions, and %d outputs per transaction, publication will require at least %d blocks, or at least %s." % (filepath, size, chainstr, fee_rate, publication_amount, chainstr, transaction_fees, refundable_amount, round(((multiplier - 1) * 100)), transaction_fees, num_transactions, num_outputs, nblockgens, time))
     sys.exit(0)
 
 # To publish, --txfee must be given.
-if txfee is None or txfee < 0:
+if (txfee is None) or (txfee < 0):
     print("Error: --txfee must be specified!")
     sys.exit(-1)
 
 # An address for any leftover change is mandatory when publishing.
-if change_address is None or change_address is "":
+if (change_address is None) or (change_address == ''):
     print("Error: --change must be specified!")
     sys.exit(-1)
 
@@ -322,7 +342,7 @@ if deadman_switch_publish is not None:
     if filepath is not None:
         print("Warning: --file and --deadman-switch-publish are incompatible.  Ignoring the --file argument and continuing...")
 
-    publication = Publication(rpc_client, deadman_switch_publish, chain, testnet or regtest, txfee, change_address, debug, verbose)
+    publication = Publication(rpc_client, deadman_switch_publish, chain, testnet or regtest, txfee, change_address, debug, verbose, unittest_publication_address)
     publication.begin()
     sys.exit(0)
 
@@ -365,11 +385,12 @@ if (deadman_switch_save is not None) and os.path.isfile(deadman_switch_save):
     sys.exit(-1)
 
 
-publication = Publication(rpc_client, filepath, content_type_const, compression_const, filename, file_description, nocrypto, nohash, deadman_switch_save, chain, testnet or regtest, num_outputs, txfee, change_address, False, debug, verbose)
+publication = Publication(rpc_client, filepath, content_type_const, compression_const, filename, file_description, nocrypto, nohash, deadman_switch_save, chain, testnet or regtest, num_outputs, num_transactions, txfee, change_address, debug, verbose, unittest_publication_address)
 
-# Register an exit handler function with a reference to this Publication.  This
-# will save the state so that it may be fully restored and resumed later.
-atexit.register(exit_handler, publication)
+# Register signal handlers.  This will save the state so that publication may
+# be fully restored and resumed later.
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 publication.begin()
 sys.exit(0)

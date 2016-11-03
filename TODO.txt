@@ -1,23 +1,42 @@
 * More testing under Windows.  Or any, really...
 
-* Fix bug: if at least one new block wasn't mined in between the state being saved & restored, the program crashes.
+* If a publication is interrupted while waiting for initial funds, the funds could be confirmed later, but would be lost (!).  Code is needed to either continue publication or refund the user (refunding is probably easier).
 
-* Add code that gracefully detects if Python2 was mistakenly used.
+* Detect if Python2 was mistakenly used.
 
 * Check if all compression programs are available at run time.
-
-* Implement parallel transactions.
 
 * Migrate from polling RPC server during publication to a callback architecture.
 
 * Add functionality to search for content through specific ranges of the blockchain.
 
-* Add comprehensive testing framework, including tests for blockchain forks & rollbacks.
-
 * Create ECDSA keys directly so that the wallet does not get polluted (note that wallet key deletion is not supported by Bitcoin).
 
-* Improve the publication cost estimator to more accurately account for overhead.
+* Add a process to closely monitor unconfirmed transactions in mempool for deadman switch keys.
 
-* Add code to retransmit transaction if it is not confirmed after X blocks.
+* Make blockchain_watcher.py get credentials from bitcoin.conf instead of command line.
 
-* Add a process to closely monitor unconfirmed transactions for deadman switch keys.
+* PartialFile should store the block number in which the last write occurred, along with its initial block number.  This will be useful for timing out failed publications later.
+
+* Clear interesting TXIDs from PartialFiles when deadman switch files are published.
+
+* Continuation messages should have nonce for unencrypted publications.
+
+* Nonces should be larger.
+
+* Try to delete interesting TXIDs in blockchain_watcher.py after they are used, if possible.
+
+* Add unit tests:
+   * Ensure blockchain forks & rollbacks handled correctly.
+   * Support the case where initial funds are sent via multiple transactions.
+   * Filenames can be changed.
+   * Descriptions can be set.
+   * Filenames with malicious paths don't break stuff.
+   * Encryption happens by default.
+   * Plaintext publishing works.
+   * Automatic compression type detection works.
+   * Specific compression type can be selected.
+   * Compression can be disabled.
+   * Automatic content type detection works.
+   * Specific content type can be selected.
+   * Restore a deadman switch publication.

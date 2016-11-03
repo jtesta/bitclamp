@@ -28,6 +28,10 @@ class RPCClient:
         # Set up the credentials for HTTP Basic authentication.
         creds = '%s:%s' % (username, password)
         self.basic_auth = 'Basic ' + base64.b64encode(creds.encode('ascii')).decode('ascii')
+
+        if (self.hostname != 'localhost') and (self.hostname != '127.0.0.1'):
+            raise Exception('hostname must be localhost or 127.0.0.1 since HTTPS is not supported!')
+
         self.url = 'http://%s:%d/' % (self.hostname, self.port)
 
 

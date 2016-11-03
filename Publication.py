@@ -45,6 +45,7 @@ class Publication:
     # Header bytes to denote the beginning and termination of a publication.
     # These appear first in each transaction payload.
     HEADER_BEGIN     = b'\x00\x11\x22\x33\x44\x55\x66\x77'
+    HEADER_NOOP      = b'\x12\x23\x34\x45\x56\x67\x78\x89'
     HEADER_TERMINATE = b'\x88\x99\xaa\xbb\xcc\xdd\xee\xff'
 
     NONCE_LEN = 8
@@ -99,7 +100,10 @@ class Publication:
     # To publish with no file name, set filename to "".  Setting it to None
     # causes it to be set to the filepath.
     def __init__(self, *args):
-        if len(args) == 8:
+
+        # If only 9 arguments are present, the constructor for publishing
+        # deadman switch keys should be used instead.
+        if len(args) == 9:
             self.deadman_switch_key_init(args)
             return
 
@@ -115,11 +119,16 @@ class Publication:
         self.blockchain = args[9]
         self.test_or_reg_network = args[10]
         self.num_outputs = args[11]
-        self.txfee = args[12]
-        self.change_address = args[13]
-        self.debug = args[14]
-        self.verbose = args[15]
+        self.num_transactions = args[12]
+        self.txfee = args[13]
+        self.change_address = args[14]
+        self.debug = args[15]
+        self.verbose = args[16]
 
+        # If not None, this is the filesystem path were the initial publication
+        # address and amount should be placed.  This is only used during unit
+        # testing.
+        self.unittest_publication_address = args[17]
 
         if len(self.filepath) == 0:
             raise Exception('filepath arg is required!')
@@ -148,10 +157,11 @@ class Publication:
         # Number of bytes in latest unconfirmed transaction.
         self.bytes_unconfirmed = 0
 
-        # A list of TxRecords that hold transactions that were sent out.  Once
-        # a transaction has passed the CONFIRMATION_THRESHOLD_* value, it is
-        # removed from this list, as we are certain it will not be reverted.
-        self.txrecords = []
+        # Initialize the txrecords data structure.
+        self.init_txrecords_and_ending_noop_array()
+
+        # Set to True when the publication termination message has been sent.
+        self.termination_record_sent = False
 
         # We generate a new address for each publication.  This is the one
         # legit key used to spend coins sent during each transaction.
@@ -159,7 +169,6 @@ class Publication:
 
         # To sign raw transactions, we need the address's private key.
         self.privkey = self.rpc_client.dumpprivkey(self.address)
-        self.d("Private key for publishing: %s" % self.privkey)
 
         # To create a P2SH address, we need to the raw ECDSA public key from
         # the address.
@@ -244,7 +253,8 @@ class Publication:
             self.filename += new_extension
             print("Automatically adding file extension '%s' to file name to reflect usage of %s compression: %s" % (new_extension, Publication.COMPRESSION_TYPE_MAP_STR[self.compression_type], self.filename))
 
-        # If the user does not want to store the hash of the file in the publication header...
+        # If the user does not want to store the hash of the file in the
+        # publication header...
         if self.nohash:
             self.file_hash = b'\x00' * 32
             self.v('Omitting the SHA256 hash from the publication header.')
@@ -252,20 +262,22 @@ class Publication:
             self.file_hash = hashlib.sha256(self.file_bytes).digest()
             self.d("SHA256 of file bytes: %s" % binascii.hexlify(self.file_hash).decode('ascii'))
 
-        # If we are in deadman switch publish mode, set the flag in the general headers.
+        # If we are in deadman switch publish mode, set the flag in the general
+        # headers.
         if self.deadman_switch_path is not None:
             self.general_flags |= Publication.GENERAL_FLAG_DEADMAN_SWITCH_FILE
             self.d("Setting GENERAL_FLAG_DEADMAN_SWITCH_FILE.")
 
         # For resuming publication after interruptions.
-        self.state_file = "bitclamp_state_" + os.path.basename(self.filepath) + '_' + time.strftime("%Y-%m-%d_%H-%M") + '.state'
+        self.state_file = os.path.join(os.getcwd(), "bitclamp_state_" + os.path.basename(self.filepath) + '_' + time.strftime("%Y-%m-%d_%H-%M") + '.state')
 
-        # Set a flag that denotes we are NOT trying to publish a deadman switch key (see constructor below for that code).
+        # Set a flag that denotes we are NOT trying to publish a deadman switch
+        # key (see constructor below for that code).
         self.deadman_switch_key_publish_mode = False
 
 
     # Special constructor for when publishing a deadman switch key.
-    def deadman_switch_key_init(self, args): #rpc_client, key_file, blockchain, test_or_reg_network, txfee, change_address, debug, verbose):
+    def deadman_switch_key_init(self, args):
         self.rpc_client = args[0]
         self.filepath = args[1]
         self.blockchain = args[2]
@@ -274,6 +286,7 @@ class Publication:
         self.change_address = args[5]
         self.debug = args[6]
         self.verbose = args[7]
+        self.unittest_publication_address = args[8]
 
         if not os.path.isfile(self.filepath):
             raise Exception("%s is not a regular file!" % self.filepath)
@@ -301,6 +314,7 @@ class Publication:
             raise Exception("Decoded key file does not yield 128 bytes!.  It appears to be corrupted.")
 
         self.num_outputs = 1
+        self.num_transactions = 1
         self.num_bytes_per_tx = Publication.SINGLE_OUTPUT_SIZE
         self.general_flags = Publication.GENERAL_FLAG_DEADMAN_SWITCH_KEY
         self.content_type = Publication.CONTENT_TYPE_UNDEFINED
@@ -316,6 +330,10 @@ class Publication:
         self.temporal_iv = None
         self.temporal_extra = None
         self.deadman_switch_path = None
+        self.termination_record_sent = False
+        self.change_sent = False
+
+        self.init_txrecords_and_ending_noop_array()
 
         # We generate a new address for each publication.  This is the one
         # legit key used to spend coins sent during each transaction.
@@ -323,7 +341,6 @@ class Publication:
 
         # To sign raw transactions, we need the address's private key.
         self.privkey = self.rpc_client.dumpprivkey(self.address)
-        self.d("Private key for publishing: %s" % self.privkey)
 
         # To create a P2SH address, we need to the raw ECDSA public key from
         # the address.
@@ -346,10 +363,6 @@ class Publication:
             print(s)
 
 
-    def set_amount(self, amount):
-        self.amount = amount
-
-
     # Return the number of confirmations a transaction needs in order to be
     # considered finalized.
     def get_confirmation_threshold(self):
@@ -363,36 +376,38 @@ class Publication:
 
     # Returns the amount that each TX output should have, excluding the fee
     # (since vin - vout = fee).
-    def get_tx_output_amount(self, nbytes, noutputs):
-        prev_amount = self.amount
-
+    @staticmethod
+    def get_tx_output_amount(d, chain, total_amount, txfee, nbytes, noutputs):
         kb = nbytes / 1024
-        if self.blockchain == Publication.BLOCKCHAIN_DOGE:
+        if chain == Publication.BLOCKCHAIN_DOGE:
             kb = math.ceil(kb)
 
         # The fee for this upcoming transaction is the number of bytes we're
         # about to send, in KB, times the per-KB fee.
-        fee = kb * self.txfee
-
-        self.amount = self.amount - fee
-        ret = self.amount / noutputs
+        fee = kb * txfee
+        per_output_amount = (total_amount - fee) / noutputs
 
         # To account for any rounding, multiply the return value by the number
         # of outputs.  We may lose an extra satoshi to the tx fee.
-        self.amount = ret * noutputs
+        next_total_amount = per_output_amount * noutputs
 
-        self.d("get_tx_output_amount(%d, %d): fee per KB: %.8f; previous amount: %.8f; fee for %d bytes: %.8f; new amount = previous amount (%.8f) - fee (%.8f) = %.8f; Returning: %.8f / %d = %.8f" % (nbytes, noutputs, self.txfee, prev_amount, nbytes, fee, prev_amount, fee, self.amount, self.amount, noutputs, ret))
-        return ret
+        d("get_tx_output_amount(total_amount: %.8f, txfee: %.8f, nbytes: %d, noutputs: %d); fee = KB (%f) * txfee (%.8f) = %.8f; Per-output amount = (total_amount (%.8f) - fee (%.8f)) / num_outputs (%d) = %.8f; next total_amount: %.8f" % (total_amount, txfee, nbytes, noutputs, kb, txfee, fee, total_amount, fee, noutputs, per_output_amount, next_total_amount))
+        return next_total_amount, per_output_amount
 
 
+    # Returns the position in the file up to which it was already read.
     def get_file_position(self):
         return self.bytes_unconfirmed
 
 
-    def add_txrecord(self, txrecord):
-        self.txrecords.append(txrecord)
+    # Adds a new TxRecord as a child to the specified parent.
+    def add_txrecord(self, parent_txrecord, new_txrecord):
+        for i in range(0, self.num_transactions):
+            if self.txrecords[i][-1] == parent_txrecord:
+                self.txrecords[i].append(new_txrecord)
 
 
+    # Updates the file position.
     def update_unconfirmed_bytes(self, num_bytes):
         self.bytes_unconfirmed += num_bytes
         self.d("update_unconfirmed_bytes(%d); count: %d" % (num_bytes, self.bytes_unconfirmed))
@@ -401,8 +416,8 @@ class Publication:
     # Return an estimate as to how long the specified number of transactions
     # will take.
     @staticmethod
-    def get_time_estimate(num_transactions, chain):
-        mins = num_transactions
+    def get_time_estimate(num_blocks, chain):
+        mins = num_blocks
         if chain == Publication.BLOCKCHAIN_BTC:
             mins = mins * 10
 
@@ -425,6 +440,26 @@ class Publication:
         return ret
 
 
+    # Initializes the txrecords list of lists.  See comment below.
+    def init_txrecords_and_ending_noop_array(self):
+
+        # A list that holds lists of TxRecords.  Entries in the top list
+        # correspond to generations of records (there are more than one when
+        # num_transactions > 1).  Inner lists track the progression of
+        # TxRecords.  Once a transaction surpasses the
+        # CONFIRMATION_THRESHOLD_* value, it is removed, as we are certain
+        # it will not be reverted.
+        self.txrecords = []
+
+        # Tracks whether the termination record was sent in this generation.
+        self.ending_noop_sent = []
+        self.num_ending_noops_sent = 0
+        for i in range(0, self.num_transactions):
+            self.txrecords.append([])
+            self.ending_noop_sent.append(False)
+
+
+    # Makes a P2SH address given script bytes.
     def make_p2sh_address(self, script_bytes):
         h = hashlib.new('ripemd160')
         h.update(hashlib.sha256(script_bytes).digest())
@@ -441,10 +476,13 @@ class Publication:
         return Utils.base58_encode(version + hash160 + tag)
 
 
+    # Returns a string representation of this Publication object.
     def __str__(self):
         s = "\n\n"
-        for txrecord in self.txrecords:
-            s += "\t" + str(txrecord) + "\n"
+        for generation in range(0, len(self.txrecords)):
+            s += "\tGen %d:\n" % generation
+            for txrecord in self.txrecords[generation]:
+                s += "\t\t" + str(txrecord) + "\n"
         return "Publication:\n\tFile path: %s\n\tFilename: %s\n\tFile size: %d\n\tTemporal key: %s\n\tBytes unconfirmed: %d%s" % (self.filepath, self.filename, self.filesize, binascii.hexlify(self.temporal_key).decode('ascii'), self.bytes_unconfirmed, s)
 
 
@@ -456,7 +494,6 @@ class Publication:
         # zeros.
         mod = byte_block_len % 32
         if mod != 0:
-            self.d("Adding %d bytes of padding to block of length %d." % (32 - mod, byte_block_len))
             byte_block += b'\x00' * (32 - mod)
 
             # Update the length since we just modified the block.
@@ -473,7 +510,6 @@ class Publication:
         # For example, if one data key is present, then 80 + 1 + 1 = 82 = 0x52
         # = OP_2 (which is correct, since there is also one legit key).
         op_num_keys = bytes([80 + num_keys + 1])
-        self.d("op_num_keys = %s; num_keys = %d; byte_block: %d" % (op_num_keys, num_keys, len(byte_block)))
 
         # 0x51 = OP_1 (meaning that at least one key/signature must be
         # presented.)
@@ -522,14 +558,24 @@ class Publication:
         self.deadman_switch_wrote_key = True
 
 
-    # Begins the publication process.  Returns the P2SH address that the user
-    # must send funds to.
+    # Begins the publication process.
     def begin(self):
 
-        self.v('Beginning to publish %s using %d outputs per transaction / %d bytes per transaction.' % (self.filepath, self.num_outputs, self.num_bytes_per_tx))
+        self.v('Beginning to publish %s using %d outputs per %d transaction%s / %d bytes per transaction.' % (self.filepath, self.num_outputs, self.num_transactions, 's' if (self.num_transactions > 1) else '', self.num_bytes_per_tx))
 
-        num_transactions = math.ceil(self.filesize / self.num_bytes_per_tx)
-        self.v('%s is %d bytes long.  Publication will take %d transactions, which, under optimal conditions, will take %s.' % (self.filepath, self.filesize, num_transactions, Publication.get_time_estimate(num_transactions, self.blockchain)))
+        # The number of blocks is calculated based on the file size, number of
+        # bytes per transaction, and number of transactions we send per block.
+        # Two is added to account for the termination message and the sending
+        # of change upon completion.
+        num_blocks = math.ceil(self.filesize / (self.num_transactions * self.num_bytes_per_tx)) + 2
+
+        # If multiple transactions are selected, the beginning and ending NOOPs
+        # must be accounted for as well.
+        if self.num_transactions > 1:
+            num_blocks += 2
+
+
+        self.v('%s is %d bytes long.  Publication will take %d blocks, which, under optimal conditions, will take %s.' % (self.filepath, self.filesize, num_blocks, Publication.get_time_estimate(num_blocks, self.blockchain)))
 
         # 8 bytes to denote the start of a file
         # 8 bytes for nonce
@@ -573,24 +619,36 @@ class Publication:
         # Create the redeem script and P2SH address for the first transaction.
         redeem_script, p2sh_address = self.make_redeem_script(header_bytes + first_block)
 
-        txrecord = TxRecord([redeem_script], [p2sh_address])
+        txrecord = TxRecord([redeem_script], [p2sh_address], bytes_to_read)
+        self.update_unconfirmed_bytes(bytes_to_read)
+
+        # Since this is the first record, add it to the beginning of all
+        # generations.
+        for i in range(0, self.num_transactions):
+            self.txrecords[i].append(txrecord)
 
         # Estimate the cost to publish this file, then tell the user where &
         # how much to send.
-        cost, unused1, unused2, unused3, unused4 = Utils.get_estimate(self.rpc_client, self.filepath, self.blockchain, self.num_outputs, self.txfee)
+        cost, unused0, unused1, unused2, unused3, num_block_generations, unused5, unused6 = Utils.get_estimate(self.rpc_client, self.filepath, self.blockchain, self.num_outputs, self.num_transactions, self.txfee)
         print("To begin publication, send %.8f %s to %s" % (cost + 0.00000001, self.get_currency_str(), p2sh_address))
-        self.d("$CLI sendtoaddress %s %.8f; $CLI generate 1; sleep 2; $CLI generate 1" % (p2sh_address, cost+0.00000001))
+
+        if self.unittest_publication_address is not None:
+            with open(self.unittest_publication_address, 'w') as f:
+                f.write("%s %.8f" % (p2sh_address, cost+0.00000001))
+
+        cli = 'bitcoin-cli'
+        if self.blockchain == Publication.BLOCKCHAIN_DOGE:
+            cli = 'dogecoin-cli'
+
+        self.d("%s sendtoaddress %s %.8f; i=0; while [ $i -lt %d ]; do %s generate 1 $PUBKEY; sleep 1.2; let \"i++\"; done" % (cli, p2sh_address, cost, num_block_generations, cli))
 
         # Wait for a transaction to get at least 1 confirmation which paid us
         # to begin.
-        if not self.wait_for_confirmation(txrecord, p2sh_address):
-            print("wait_for_confirmation() failed!")
+        if not self.wait_for_funds(txrecord, p2sh_address):
+            print("wait_for_funds() failed!")
 
         print("Received funds.  Beginning publication...")
         self.received_funds = True
-
-        self.update_unconfirmed_bytes(bytes_to_read)
-        self.add_txrecord(txrecord)
 
         # Check that the amount sent by the user meets the minimum.
         sent_amount = 0.0
@@ -598,31 +656,143 @@ class Publication:
             sent_amount += float(value)
         if sent_amount < cost:
             print("Warning: only %.8f was sent instead of the minimum (%.8f)!" % (sent_amount, cost))
-        self.set_amount(sent_amount)
+        txrecord.set_total_amount(sent_amount)
 
-        # TXID, vout_nums point to user's transaction to script.  TxRecord has
-        # redeem script for next transaction.
-        continue_flag = True
 
-        # If we are trying to publish a deadman switch key, set end_of_file_reached to True in order to skip the
-        # termination message, which isn't necessary.
+        # If we are trying to publish a deadman switch key, set
+        # end_of_file_reached to True in order to skip the termination message,
+        # which isn't necessary.
         if self.deadman_switch_key_publish_mode:
             self.end_of_file_reached = True
+            self.termination_record_sent = True
 
+        self.resume()
+
+
+    # If self.txrecords is be properly configured, this resumes publication.
+    def resume(self):
+
+        continue_flag = True
+        first_block = True
+        sending_termination_record = False
+        sending_change = False
         while continue_flag:
-            self.d("Sending redeemscripts in: %s" % txrecord)
-            next_txrecord = self.resume(txrecord)
-            self.d("Next record: %s" % next_txrecord)
-            self.d("Waiting for next txid to be confirmed: %s" % next_txrecord.get_txid())
-            if not self.wait_for_confirmation(next_txrecord, None):
-                print("wait_for_confirmation() failed!")
 
-            print("Sent data block was confirmed.  Sending next block...")
+            #
+            # This is a complex structure used to track what records need to be
+            # transmitted, and what their predecessors are.  There are 4 cases
+            # for it:
+            #
+            # 1. One input record goes to multiple output records.  This
+            # happens at the start of a publication when multiple transactions
+            # used.  NOOPs are used to split the one input into multiple
+            # outputs.  The structure would look like this:
+            #
+            # [([previous_txrecord], [next_txrecord1, next_txrecord2, ...])]
+            #
+            #
+            # 2. One input record goes to one output record.  This happens
+            # when one transaction per block is used.  The structure would
+            # look like this:
+            #
+            # [([previous_txrecord], [next_txrecord])]
+            #
+            #
+            # 3. One input record goes to one output record, and there are
+            # multiple pairs.  This happens when multiple transactions per
+            # block is used.  The structure would look like this:
+            #
+            # [([previous_txrecord1], [next_txrecord1]),
+            #  ([previous_txrecord2], [next_txrecord2]), ...]
+            #
+            #
+            # 4. Multiple input records go to a single output.  This happens
+            # at the end of a multiple-transaction publication to join the
+            # generations back into one (using NOOPs).  The structure would
+            # look like this:
+            #
+            # [([previous_txrecord1, previous_txrecord2, ...], next_txrecord)]
+            #
+            #
+            txrecords_to_transmit = []
 
-            txrecord = next_txrecord
+            if first_block and (self.num_transactions > 1):
+                self.d("Creating initial NOOP messages...")
+                previous_txrecord = self.txrecords[0][-1]
 
-            if self.change_sent is True:
-                next_txrecord.set_last_record()
+                next_txrecords = []
+                for generation in range(0, self.num_transactions):
+                    next_txrecord = self.create_noop_record()
+                    self.txrecords[generation].append(next_txrecord)
+                    next_txrecords.append(next_txrecord)
+
+                txrecords_to_transmit = [([previous_txrecord], next_txrecords)]
+
+            elif (self.num_transactions == 1) and (self.end_of_file_reached is False):
+                self.d("Creating next block for single-transaction publication...")
+                previous_txrecord = self.txrecords[0][-1]
+
+                next_txrecord = self.create_next_txrecord()
+                self.add_txrecord(previous_txrecord, next_txrecord)
+                txrecords_to_transmit = [([previous_txrecord], [next_txrecord])]
+
+            elif (self.num_transactions > 1) and (self.num_ending_noops_sent != self.num_transactions):
+                self.d("Creating next blocks for multi-transaction publication...")
+
+                for generation in range(0, self.num_transactions):
+                    previous_txrecord = self.txrecords[generation][-1]
+
+                    if self.end_of_file_reached:
+                        if self.ending_noop_sent[generation]:
+                            continue
+
+                        self.d("Creating ending NOOP for generation %d" % generation)
+                        next_txrecord = self.create_noop_record()
+                        self.ending_noop_sent[generation] = True
+                        self.num_ending_noops_sent += 1
+                    else:
+                        next_txrecord = self.create_next_txrecord()
+
+                    self.add_txrecord(previous_txrecord, next_txrecord)
+                    txrecords_to_transmit.append(([previous_txrecord], [next_txrecord]))
+
+            elif self.termination_record_sent is False:
+                self.d("Sending termination record...")
+
+                termination_txrecord = self.create_termination_record()
+                termination_txrecord.set_last_record()
+
+                last_txrecords = []
+                for generation in range(0, self.num_transactions):
+                    # Get all the previous records.
+                    last_txrecords.append(self.txrecords[generation][-1])
+
+                    # Append the termination record to the end of all generations.
+                    self.txrecords[generation].append(termination_txrecord)
+
+                txrecords_to_transmit = [(last_txrecords, [termination_txrecord])]
+                sending_termination_record = True
+            else:
+                termination_txrecord = self.txrecords[0][-1]
+
+                print("Sending about %.8f in change to %s..." % (termination_txrecord.get_total_amount(), self.change_address))
+                sending_change = True
+                txrecords_to_transmit = [([termination_txrecord], [TxRecord([], [self.change_address], 0)])]
+
+            # Now transmit/re-transmit all the txrecords.
+            self.transmit_txrecords(txrecords_to_transmit)
+
+            first_block = False
+
+            if sending_termination_record:
+                self.termination_record_sent = True
+
+                # Add termination record to the end of all generations.
+                for generation in range(0, self.num_transactions):
+                    self.txrecords[generation].append(termination_txrecord)
+
+            if sending_change:
+                self.change_sent = True
                 continue_flag = False
 
 
@@ -630,150 +800,248 @@ class Publication:
 
         # Keep waiting until all TxRecords have surpassed the confirmation
         # threshold.
-        while len(self.txrecords) > 0:
-            if not self.wait_for_confirmation(next_txrecord, None):
-                print("wait_for_confirmation() failed!")
-            print("%d transactions awaiting full confirmation..." % len(self.txrecords))
+        while not self.complete:
+            if not self.wait_for_new_block([], True):
+                print("wait_for_new_block() failed!")
 
+            i = 0
             self.d("\nTxRecords:")
-            for txrecord in self.txrecords:
-                self.d("\t%s" % txrecord)
+            for generation in self.txrecords:
+                for txrecord in generation:
+                    i += 1
+                    self.d("\t%s" % txrecord)
+            print("%d transactions awaiting full confirmation..." % i)
 
         print("All transactions fully confirmed.")
 
 
-    def resume(self, txrecord):
+    # Transmits/re-transmits TxRecords.
+    def transmit_txrecords(self, txrecords_to_transmit):
 
+            # Now transmit/re-transmit all the txrecords.
+            while len(txrecords_to_transmit) > 0:
+
+                txrecords_to_watch = []
+                initial_nop_split = False
+                for transaction in txrecords_to_transmit:
+                    previous_txrecords = transaction[0]
+                    next_txrecords = transaction[1]
+
+                    next_txrecord = None
+                    if len(next_txrecords) == 1:
+                        next_txrecord = next_txrecords[0]
+
+                    # Handle case #1 (see huge comment on
+                    # txrecords_to_transmit, above).
+                    else:
+                        initial_nop_split = True
+
+                        redeem_scripts = []
+                        p2sh_addresses = []
+                        for txr in next_txrecords:
+                            redeem_scripts.extend(txr.redeem_scripts)
+                            p2sh_addresses.extend(txr.p2sh_addresses)
+
+                        next_txrecord = TxRecord(redeem_scripts, p2sh_addresses, 0)
+
+                    # Send this transaction on its way!
+                    self.send_transaction(previous_txrecords, next_txrecord)
+                    txrecords_to_watch.append(next_txrecord)
+
+                self.d("Waiting for next block...")
+                self.wait_for_new_block(txrecords_to_watch)
+
+                # Handle case #1 (see huge comment on txrecords_to_transmit,
+                # above).
+                if initial_nop_split and (txrecords_to_watch[0].get_confirmations() > 0):
+                    self.d("Handling NOOP split...")
+                    bogus_txrecord = txrecords_to_watch[0]
+                    for generation in range(0, self.num_transactions):
+
+                        temp_txrecord = self.txrecords[generation][-1]
+                        temp_txrecord.set_txid(bogus_txrecord.get_txid())
+                        temp_txrecord.set_total_amount(bogus_txrecord.get_total_amount() / self.num_transactions)
+                        temp_txrecord.set_confirmations(bogus_txrecord.get_confirmations())
+
+                        temp_txrecord.add_output_script(bogus_txrecord.output_scripts.pop(0))
+                        temp_txrecord.add_vout_num(bogus_txrecord.vout_nums.pop(0))
+                        temp_txrecord.add_value(bogus_txrecord.values.pop(0))
+
+                    # The number of confirmations is 1 or more, so no need to
+                    # retransmit.
+                    txrecords_to_transmit = []
+
+                else:
+
+                    # Go through all the ones we were watching.
+                    for watched_txrecord in txrecords_to_watch:
+                        # If this one has 1 or more confirmations...
+                        if watched_txrecord.get_confirmations() > 0:
+                            # ... remove it from the to-transmit list.
+                            for transaction in txrecords_to_transmit:
+                                if transaction[1][0] == watched_txrecord:
+                                    txrecords_to_transmit.remove(transaction)
+                        else:
+                            self.d("TXID not confirmed in last block: %s" % watched_txrecord.get_txid())
+
+                num_retransmit = len(txrecords_to_transmit)
+                if num_retransmit > 0:
+                    self.d("Re-transmitting %d unconfirmed records..." % num_retransmit)
+
+
+    # Creates and returns a TxRecord with a termination message.
+    def create_termination_record(self):
+        key = self.temporal_key
+        iv = self.temporal_iv
+        extra = self.temporal_extra
+
+        # If the deadman switch is enabled, overwrite the key information.
+        if self.deadman_switch_path is not None:
+            key = b'\xff' * 32
+            iv = b'\xff' * 32
+            extra = b'\xff' * 32
+
+        # 8 bytes to denote the end of the file
+        # 8 bytes for the nonce
+        # 32 bytes for the nonce hash
+        # 4 reserved bytes
+        # 32 bytes for the temporal encryption key
+        # 32 bytes for the temporal IV (currently not used)
+        # 32 bytes for extra encryption data (currently not used)
+        nonce = os.urandom(Publication.NONCE_LEN)
+        nonce_hash = hashlib.sha256(Publication.HEADER_TERMINATE + nonce + Publication.NONCE_SALT).digest()
+        header_termination_bytes = Publication.HEADER_TERMINATE + \
+            nonce + \
+            nonce_hash + \
+            b'\x00\x00\x00\x00' + \
+            key + \
+            iv + \
+            extra
+
+        self.d("\nTermination bytes: %s" % binascii.hexlify(header_termination_bytes).decode('ascii'))
+
+        redeem_script, p2sh_address = self.make_redeem_script(header_termination_bytes)
+        return TxRecord([redeem_script], [p2sh_address], 0)
+
+
+    # Creates and returns a TxRecord with a NOOP message.
+    def create_noop_record(self):
+        nonce = os.urandom(Publication.NONCE_LEN)
+        nonce_hash = hashlib.sha256(Publication.HEADER_NOOP + nonce + Publication.NONCE_SALT).digest()
+        header_noop_bytes = Publication.HEADER_NOOP + nonce + nonce_hash
+
+        redeem_script, p2sh_address = self.make_redeem_script(header_noop_bytes)
+        return TxRecord([redeem_script], [p2sh_address], 0)
+
+
+    # Creates the next TxRecord, based on the number of bytes previously read
+    # from the file.
+    def create_next_txrecord(self):
         redeem_scripts = []
         p2sh_addresses = []
 
-        # The number of outputs might end up being less than the user-defined
-        # amount if the bytes left to publish do not align to a boundary.
-        noutputs = self.num_outputs
-
         file_pos = self.get_file_position()
         bytes_to_read = 0
-        if (file_pos >= self.filesize) and (self.end_of_file_reached is False):
+
+        self.d("Seeking to file position %d." % self.get_file_position())
+
+        # Calculate the number of bytes to publish now.  This is set to
+        # self.num_bytes_per_tx, unless the remaining bytes is smaller.
+        bytes_to_read = self.num_bytes_per_tx
+        if (file_pos + bytes_to_read) > self.filesize:
+            bytes_to_read = self.filesize - file_pos
             self.end_of_file_reached = True
-            self.d("Reached end of file.  Finalizing publication...")
+        elif (file_pos + bytes_to_read) == self.filesize:
+            self.end_of_file_reached = True
 
-            key = self.temporal_key
-            iv = self.temporal_iv
-            extra = self.temporal_extra
+        # Pack the file position integer into bytes to insert into the message.
+        file_offset = struct.pack('!I', file_pos)
 
-            # If the deadman switch is enabled, overwrite the key information.
-            if self.deadman_switch_path is not None:
-                key = b'\xff' * 32
-                iv = b'\xff' * 32
-                extra = b'\xff' * 32
+        # Construct the block of data.
+        next_block = file_offset + self.file_bytes[file_pos:file_pos + bytes_to_read]
+        self.d("Next block: %s" % binascii.hexlify(next_block).decode('ascii'))
 
-            # 8 bytes to denote the end of the file
-            # 4 bytes to denote the number of parallel transactions
-            # 4 reserved bytes
-            # 32 bytes for the temporal encryption key
-            # 32 bytes for the temporal IV (currently not used)
-            # 32 bytes for extra encryption data (currently not used)
-            header_termination_bytes = Publication.HEADER_TERMINATE + \
-                struct.pack('!I', 1) + \
-                b'\x00\x00\x00\x00' + \
-                key + \
-                iv + \
-                extra
+        next_block_len = len(next_block)
+        noutputs = int(min(self.num_outputs, math.ceil(next_block_len / Publication.SINGLE_OUTPUT_SIZE)))
+        if noutputs != self.num_outputs:
+            self.d("File does not align to %d boundary (%d); using %d outputs instead of %d." % (Publication.SINGLE_OUTPUT_SIZE, next_block_len, noutputs, self.num_outputs))
 
-            self.d("\nTermination bytes: %s" % binascii.hexlify(header_termination_bytes).decode('ascii'))
-            
-            redeem_script, p2sh_address = self.make_redeem_script(header_termination_bytes)
+        # Create output addresses & corresponding redeemscripts
+        start_pos = 0
+        end_pos = Publication.SINGLE_OUTPUT_SIZE
+        for i in range(0, noutputs):
+            redeem_script, p2sh_address = self.make_redeem_script(next_block[start_pos:end_pos])
             redeem_scripts.append(redeem_script)
             p2sh_addresses.append(p2sh_address)
 
-            noutputs = 1
+            start_pos += Publication.SINGLE_OUTPUT_SIZE
+            end_pos += Publication.SINGLE_OUTPUT_SIZE
 
-        elif self.end_of_file_reached is True:
-            self.d("Sending terminating message to change address...")
-            p2sh_addresses.append(self.change_address)
-            self.change_sent = True
-
-            noutputs = 1
-        else:
-
-            self.d("Seeking to file position %d." % self.get_file_position())
-
-            # Calculate the number of bytes to publish now.  This is set to
-            # self.num_bytes_per_tx, unless the remaining bytes is smaller.
-            bytes_to_read = self.num_bytes_per_tx
-            if file_pos + bytes_to_read > self.filesize:
-                bytes_to_read = self.filesize - file_pos
-
-            file_offset = struct.pack('!I', file_pos)
-
-            next_block = file_offset + self.file_bytes[file_pos:file_pos + bytes_to_read]
-            self.d("Next block: %s" % binascii.hexlify(next_block).decode('ascii'))
-
-            next_block_len = len(next_block)
-            noutputs = int(min(self.num_outputs, math.ceil(next_block_len / Publication.SINGLE_OUTPUT_SIZE)))
-            if noutputs != self.num_outputs:
-                self.d("File does not align to %d boundary (%d); using %d outputs instead of %d." % (Publication.SINGLE_OUTPUT_SIZE, next_block_len, noutputs, self.num_outputs))
-
-            # Create output addresses & corresponding redeemscripts
-            start_pos = 0
-            end_pos = Publication.SINGLE_OUTPUT_SIZE
-            for i in range(0, noutputs):
-                redeem_script, p2sh_address = self.make_redeem_script(next_block[start_pos:end_pos])
-                redeem_scripts.append(redeem_script)
-                p2sh_addresses.append(p2sh_address)
-
-                start_pos += Publication.SINGLE_OUTPUT_SIZE
-                end_pos += Publication.SINGLE_OUTPUT_SIZE
+        self.update_unconfirmed_bytes(bytes_to_read)
+        return TxRecord(redeem_scripts, p2sh_addresses, bytes_to_read)
 
 
-        next_txrecord = TxRecord(redeem_scripts, p2sh_addresses)
-        self.add_txrecord(next_txrecord)
+    # Transmits a transaction.
+    def send_transaction(self, txrecords, next_txrecord):
 
-
-
-        signed_raw_tx_hex = self.create_and_sign_tx(txrecord, redeem_scripts, p2sh_addresses, 0.00000001)
+        # Using a bogus amount, get the length of this signed transaction
+        signed_raw_tx_hex = self.create_and_sign_tx(txrecords, next_txrecord.p2sh_addresses, 0.00000001)
         tx_len = len(signed_raw_tx_hex) / 2
         self.d("Length of signed message: %d" % tx_len)
 
-        amount = self.get_tx_output_amount(tx_len, noutputs)
+        total_amount = 0
+        for txrecord in txrecords:
+            total_amount += txrecord.get_total_amount()
 
+        next_total_amount, per_output_amount = Publication.get_tx_output_amount(self.d, self.blockchain, total_amount, self.txfee, tx_len, min(self.num_outputs, len(next_txrecord.p2sh_addresses)))
+        next_txrecord.set_total_amount(next_total_amount)
 
         # If we reached the end of the file, we send the final amount to one
         # single P2SH address
         if self.change_sent:
-            self.d("Sending %.8f to change address." % amount)
+            self.d("Sending %.8f to change address." % per_output_amount)
         else:
-            self.d("Sending %.8f per output." % amount)
+            self.d("Sending %.8f per output." % per_output_amount)
 
-        signed_raw_tx_hex = self.create_and_sign_tx(txrecord, redeem_scripts, p2sh_addresses, amount)
+        signed_raw_tx_hex = self.create_and_sign_tx(txrecords, next_txrecord.p2sh_addresses, per_output_amount)
         self.d("Signed raw_tx: %s" % signed_raw_tx_hex)
 
-        next_txid = self.rpc_client.sendrawtransaction(signed_raw_tx_hex)
+        nbytes = 0
+        for txr in txrecords:
+            nbytes += txr.num_bytes
+
+        if nbytes > 0:
+            num_signed_raw_tx_bytes = len(signed_raw_tx_hex) / 2
+            efficiency = nbytes / num_signed_raw_tx_bytes
+            overhead = (num_signed_raw_tx_bytes - nbytes) / nbytes
+            self.d("Number of payload bytes: %d; number of bytes in signed raw tx: %d; efficiency: %.8f; overhead multiplier: %.8f" % (nbytes, num_signed_raw_tx_bytes, efficiency, (overhead + 1.0)))
+
+        next_txid = ''
+        try:
+            next_txid = self.rpc_client.sendrawtransaction(signed_raw_tx_hex)
+        except urllib.error.HTTPError as e:
+            # If the server complained that this transaction is already in the
+            # blockchain, continue on.  Otherwise, re-throw the exception.
+            if (e.code != 500) or (e.read().decode('ascii').find('transaction already in block chain') == 0):
+                raise(e)
+
         if len(next_txid) == 64:
             self.d("Sent!: %s" % next_txid)
             next_txrecord.set_txid(next_txid)
-            self.update_unconfirmed_bytes(bytes_to_read)
 
             # If we are in deadman switch mode, and did not yet write out the
             # key, do that now.
             self.store_deadman_switch_key(next_txid)
-
-            return next_txrecord
+            return True
         else:
-            print("Failed: %s" % next_txid)
-            return None
+            print("Failed: [%s]" % next_txid)
+            return False
 
 
-    def create_and_sign_tx(self, txrecord, redeem_scripts, p2sh_addresses, amount):
-
-        txid = txrecord.txid
-
+    # Creates a raw transaction and signs it.
+    def create_and_sign_tx(self, txrecords, p2sh_addresses, amount):
         inputs = []
-        for vout_num in txrecord.get_vout_nums():
-            input = {}
-            input['txid'] = txid
-            input['vout'] = vout_num
-            inputs.append(input)
+        stuffs = []
 
         # This must be a string instead of dictionary, because order is
         # extremely important (a dictionary often changes the order
@@ -784,36 +1052,47 @@ class Publication:
             outputs_str += "\"%s\": %.8f," % (p2sh_address, amount)
         outputs_str = outputs_str[:-1] + '}'
 
-        unsigned_raw_tx = self.rpc_client.createrawtransaction(json.dumps(inputs), outputs_str)
 
-        output_scripts = txrecord.get_output_scripts()
-        vout_nums = txrecord.get_vout_nums()
-        stuffs = []
+        for txrecord in txrecords:
+            txid = txrecord.txid
 
-        if len(vout_nums) != len(txrecord.redeem_scripts):
-            print("Len mismatch: %d, %d" % (len(vout_nums), len(txrecord.redeem_scripts)))
+            for vout_num in txrecord.get_vout_nums():
+                input = {}
+                input['txid'] = txid
+                input['vout'] = vout_num
+                inputs.append(input)
 
 
-        for i in range(0, len(txrecord.redeem_scripts)):
-            stuff = {}
-            stuff['txid'] = txid
-            stuff['vout'] = vout_nums[i]
-            stuff['scriptPubKey'] = output_scripts[i]
-            stuff['redeemScript'] = binascii.hexlify(txrecord.redeem_scripts[i]).decode('ascii')
-            stuffs.append(stuff)
+            output_scripts = txrecord.get_output_scripts()
+            vout_nums = txrecord.get_vout_nums()
+
+            if len(vout_nums) != len(txrecord.redeem_scripts):
+                print("Len mismatch: %d, %d" % (len(vout_nums), len(txrecord.redeem_scripts)))
+                print("vout_nums: %s" % ', '.join(str(x) for x in vout_nums))
+
+
+            for i in range(0, len(txrecord.redeem_scripts)):
+                stuff = {}
+                stuff['txid'] = txid
+                stuff['vout'] = vout_nums[i]
+                stuff['scriptPubKey'] = output_scripts[i]
+                stuff['redeemScript'] = binascii.hexlify(txrecord.redeem_scripts[i]).decode('ascii')
+                stuffs.append(stuff)
+
+        unsigned_raw_tx = None
+        try:
+            unsigned_raw_tx = self.rpc_client.createrawtransaction(json.dumps(inputs), outputs_str)
+        except urllib.error.HTTPError as e:
+            print(e.read().decode('ascii'))
+            raise(e)
 
         signed_raw_tx = self.rpc_client.signrawtransaction(unsigned_raw_tx, stuffs, self.privkey)
         return signed_raw_tx['hex']
 
 
-
-    # Wait for a transaction to get at least 1 confirmation.  If the TXID is
-    # given, then that specific transaction is waited for.  Otherwise, all
-    # transactions in new blocks are examined for funds to be sent to the
-    # recipient_address.
-    def wait_for_confirmation(self, txrecord, recipient_address):
-        txid = txrecord.get_txid()
-
+    # Wait for a transaction to get at least 1 confirmation.
+    # TODO: change this architecture so that bitcoind/dogecoind isn't polled.
+    def wait_for_new_block(self, txrecords, purge = False):
         continue_flag = True
         best_block_hash = self.rpc_client.getbestblockhash()
 
@@ -832,85 +1111,110 @@ class Publication:
 
             # Update the confirmation count for all TxRecords we are currently
             # maintaining.
-            self.update_confirmations()
+            self.update_confirmations(purge)
+            for txrecord in txrecords:
+                txid = txrecord.get_txid()
 
-            # If we are looking for a specific TXID...
-            if txid is not None:
-                # Try to get the JSON of the raw transaction.
-                rawtransaction = self.rpc_client.getrawtransaction(txid, 1)
+                # If we are looking for a specific TXID...
+                if txid is not None:
+                    # Try to get the JSON of the raw transaction.
+                    rawtransaction = self.rpc_client.getrawtransaction(txid, 1)
 
-                # Check if it has a "confirmations" field.  If not, this TXID
-                # is still unconfirmed.
-                if 'confirmations' in rawtransaction:
-                    ret_confirmations = int(rawtransaction['confirmations'])
-                    if ret_confirmations > 0:
+                    # Check if it has a "confirmations" field.  If not, this
+                    # TXID is still unconfirmed.
+                    if 'confirmations' in rawtransaction:
+                        confirmations = int(rawtransaction['confirmations'])
+                        if confirmations > 0:
+                            txrecord.set_confirmations(confirmations)
+                            if len(txrecord.get_output_scripts()) == 0 and len(txrecord.get_vout_nums()) == 0 and len(txrecord.get_values()) == 0:
+                                vouts = rawtransaction['vout']
+                                for vout in vouts:
+                                    txrecord.add_output_script(vout['scriptPubKey']['hex'])
+                                    txrecord.add_vout_num(int(vout['n']))
+                                    txrecord.add_value(vout['value'])
+                    else:
+                        self.d("No confirmation for %s" % txid)
+
+            return True
+
+
+    # Waits for a initial publication funds.
+    def wait_for_funds(self, txrecord, recipient_address):
+        continue_flag = True
+        best_block_hash = self.rpc_client.getbestblockhash()
+
+        while continue_flag:
+            time.sleep(1)
+
+            block_hash = self.rpc_client.getbestblockhash()
+
+            # If we havent found a new block, then loop back to the top and
+            # sleep.
+            if block_hash == best_block_hash:
+                continue
+
+            self.d("Detected new block.  Block hash: %s" % block_hash)
+            best_block_hash = block_hash
+
+            # Get the latest block, which includes all the TXIDs.
+            t1 = time.time()
+
+            block_txs = self.rpc_client.getblock(best_block_hash)['tx']
+            self.d("Parsed getblock(%s) in %d seconds." % (best_block_hash, int(time.time() - t1)))
+
+            t1 = time.time()
+            # Loop through all the TXIDs in this block, and parse them all.
+            for tx in block_txs:
+                try:
+                    rawtransaction = self.rpc_client.getrawtransaction(tx, 1)
+                except Exception as e:
+                    print("Error while trying to retrieve TXID %s." % tx)
+                    continue
+
+                ret_confirmations = int(rawtransaction['confirmations'])
+                vouts = rawtransaction['vout']
+                for vout in vouts:
+
+                    if (vout['scriptPubKey']['type'] == 'scripthash') and (recipient_address in vout['scriptPubKey']['addresses']):
+                        txrecord.set_txid(tx)
+                        txrecord.add_output_script(vout['scriptPubKey']['hex'])
+                        txrecord.add_vout_num(int(vout['n']))
+                        txrecord.add_value(vout['value'])
+                        self.d("Found sent funds (%s) in TXID %s" % (vout['value'], tx))
+                        continue_flag = False
+                        break
+
+                if continue_flag == False:
+                    break
+
+            self.d("Parsed all TXIDs in block in %d seconds." % int(time.time() - t1))
+
+        return True
+
+
+    # Updates the confirmation count for all tracked transactions.  If purge is
+    # True, a full purge of records is done, if the confirmations surpass the
+    # threshold.  Otherwise, the last record for each generation is preserved,
+    # regardless of its confirmation number.
+    def update_confirmations(self, purge = False, update_vout = False):
+
+        # Update all the confirmation counts for all TxRecords in the list.
+        for i in range(0, self.num_transactions):
+            for txrecord in self.txrecords[i]:
+                txid = txrecord.get_txid()
+                if txid is not None:
+                    rawtransaction = self.rpc_client.getrawtransaction(txid, 1)
+                    if 'confirmations' in rawtransaction:
+                        confirmations = int(rawtransaction['confirmations'])
+                        txrecord.set_confirmations(confirmations)
+
+                    if update_vout and 'vout' in rawtransaction and len(txrecord.get_output_scripts()) == 0 and len(txrecord.get_vout_nums()) == 0 and len(txrecord.get_values()) == 0:
                         vouts = rawtransaction['vout']
                         for vout in vouts:
                             txrecord.add_output_script(vout['scriptPubKey']['hex'])
                             txrecord.add_vout_num(int(vout['n']))
                             txrecord.add_value(vout['value'])
 
-                        return True
-
-            # If we are looking for funds sent to an address.
-            else:
-
-                # Get the latest block, which includes all the TXIDs.
-                t1 = time.time()
-
-                block_txs = self.rpc_client.getblock(best_block_hash)['tx']
-                self.d("Parsed getblock(%s) in %d seconds." % (best_block_hash, int(time.time() - t1)))
-
-                t1 = time.time()
-                # Loop through all the TXIDs in this block, and parse them all.
-                for tx in block_txs:
-                    try:
-                        rawtransaction = self.rpc_client.getrawtransaction(tx, 1)
-                    except Exception as e:
-                        print("Error while trying to retrieve TXID %s." % tx)
-                        continue
-
-                    ret_confirmations = int(rawtransaction['confirmations'])
-                    vouts = rawtransaction['vout']
-                    for vout in vouts:
-
-                        if (vout['scriptPubKey']['type'] == 'scripthash') and (recipient_address in vout['scriptPubKey']['addresses']):
-                            txrecord.set_txid(tx)
-                            txrecord.add_output_script(vout['scriptPubKey']['hex'])
-                            txrecord.add_vout_num(int(vout['n']))
-                            txrecord.add_value(vout['value'])
-                            continue_flag = False
-                            break
-
-                    if continue_flag == False:
-                        break
-
-                print("Parsed all TXIDs in block in %d seconds." % int(time.time() - t1))
-
-        return True
-
-
-    # Updates the confirmation count for all tracked transactions.
-    def update_confirmations(self, update_vout = False):
-
-        # Update all the confirmation counts for all TxRecords in the list.
-        for txrecord in self.txrecords:
-            txid = txrecord.get_txid()
-            if txid is not None:
-
-                rawtransaction = self.rpc_client.getrawtransaction(txid, 1)
-                if 'confirmations' in rawtransaction:
-                    confirmations = int(rawtransaction['confirmations'])
-                    txrecord.set_confirmations(confirmations)
-
-                if update_vout and 'vout' in rawtransaction and len(txrecord.get_output_scripts()) == 0 and len(txrecord.get_vout_nums()) == 0 and len(txrecord.get_values()) == 0:
-                    print("LENS: %d %d %d" % (len(txrecord.get_output_scripts()), len(txrecord.get_vout_nums()), len(txrecord.get_values())))
-                    vouts = rawtransaction['vout']
-                    for vout in vouts:
-                        txrecord.add_output_script(vout['scriptPubKey']['hex'])
-                        txrecord.add_vout_num(int(vout['n']))
-                        txrecord.add_value(vout['value'])
-                            
 
         confirmation_threshold = self.get_confirmation_threshold()
 
@@ -919,26 +1223,32 @@ class Publication:
         # the next one, remove the current TxRecord.  The next record matters
         # because to re-transmit a transaction, information from the previous
         # TxRecord (its redeemscripts) are needed.
-        i = 0
-        while i < len(self.txrecords) - 1:
-        #for i in range(0, len(self.txrecords) - 1):
-            #print("Len: %d" % len(self.txrecords))
-            #print("i: %d" % i)
-            txrecord_cur = self.txrecords[i]
-            txrecord_next = self.txrecords[i + 1]
+        for i in range(0, self.num_transactions):
+            generation = self.txrecords[i]
+            j = 0
+            while j < len(generation) - 1:
+                txrecord_cur = generation[j]
+                txrecord_next = generation[j + 1]
 
-            if (txrecord_cur.get_confirmations() > confirmation_threshold) and (txrecord_next.get_confirmations() > confirmation_threshold):
-                self.d("TXID %s has surpassed the confirmation threshold (%d)." % (txid, confirmation_threshold))
-                self.txrecords.remove(txrecord_cur)
-            else:
-                i += 1
+                if (txrecord_cur.get_confirmations() > confirmation_threshold) and (txrecord_next.get_confirmations() > confirmation_threshold) and (purge or len(self.txrecords[i]) > 2):
+                    self.d("TXID %s has surpassed the confirmation threshold (%d)." % (txid, confirmation_threshold))
+                    generation.remove(txrecord_cur)
+                else:
+                    j += 1
 
-        if len(self.txrecords) == 1:
-            txrecord = self.txrecords[0]
-            if txrecord.is_last_record() and (txrecord.get_confirmations() > confirmation_threshold):
-                self.d("Last TXID (%s) surpassed the confirmation threshold." % txrecord.get_txid())
-                self.txrecords = []
-                self.complete = True
+            if purge and (len(generation) == 1):
+                txrecord = generation[0]
+                if txrecord.is_last_record() and (txrecord.get_confirmations() > confirmation_threshold):
+                    self.d("Last TXID (%s) surpassed the confirmation threshold." % txrecord.get_txid())
+                    self.txrecords[i] = []
+
+        # Update the is_complete flag.  This will be True only if all
+        # generations are empty lists.
+        is_complete = True
+        for i in range(0, self.num_transactions):
+            is_complete = is_complete and (self.txrecords[i] == [])
+
+        self.complete = is_complete
 
 
     # Given a CONTENT_TYPE_ constant, return its string representation.

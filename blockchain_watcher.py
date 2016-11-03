@@ -14,10 +14,10 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 
-# This program is called by bitcoind every time it finds a new block.  This
-# extracts data and re-assembles files found in the blockchain.
+# This program is called by bitcoind/dogecoind every time it finds a new block.
+# It extracts data and re-assembles files found in the blockchain.
 
-import atexit, binascii, fcntl, json, os, struct, sys
+import atexit, binascii, fcntl, json, os, pickle, struct, sys
 from Publication import *
 from Utils import *
 from PartialFile import *
@@ -35,20 +35,23 @@ def exit_func():
     if lock_fd is not None:
         lock_fd.close()
 
+
 # Writes a message to the log file.
 def log(s):
     fd.write(s + "\n")
     fd.flush()
+
 
 # Writes a message to the log file only if debugging is enabled.
 def d(s):
     if debug:
         log(s)
 
+
 # Decrypts a deadman switch file, given a key.  Stores the decrypted file
 # in the output directory.  Returns True on success, or False if no matching
 # deadman switch file was found (or an error occurred).
-def decrypt_deadman_switch_file(data):
+def decrypt_deadman_switch_file(partial_files, data):
     txid_hex = binascii.hexlify(data[0:32]).decode('ascii')
     key = data[32:64]
     iv = data[64:96]
@@ -60,73 +63,35 @@ def decrypt_deadman_switch_file(data):
     for partial_file in partial_files:
         if txid_hex == partial_file.initial_txid:
             partial_file.debug_func = d
-            return partial_file.finalize(None, key)
+            return partial_file.finalize(key)
 
     log('Failed to find a matching deadman switch file with TXID: %s' % txid_hex)
     return False
 
-# This script must be called as:
-#    python3 blockchain_watcher.py rpchostname rpcport rpcuser rpcpass
-#       /path/to/output_dir /path/to/log_file.txt block_hash_goes_here [-d]
-if __name__ == '__main__':
 
-    rpchost = sys.argv[1]
-    rpcport = sys.argv[2]
-    rpcuser = sys.argv[3]
-    rpcpass = sys.argv[4]
-    output_dir = sys.argv[5]
-    log_file = sys.argv[6]
-    block_hash = sys.argv[7]
+# Processes a block by inspecting its transactions and parsing any included
+# data.
+def handle_block(current_block_hash, current_block = None):
 
-    rpc_client = RPCClient(rpchost, rpcport, rpcuser, rpcpass)
+    # If the parsed block wasn't provided, parse it now.
+    if current_block is None:
+        current_block = rpc_client.getblock(current_block_hash)
 
-    if len(sys.argv) == 9 and sys.argv[8] == '-d':
-        debug = True
-
-    # Open the log file for appending.  If this fails, terminate.
-    try:
-        fd = open(log_file, 'a')
-    except Exception as e:
-        sys.exit(-1)
-
-    # Register the exit function.  This will close the log file handle upon
-    # program termination.
-    atexit.register(exit_func)
-
-    # Ensure that the output directory is writable.
-    if not os.access(output_dir, os.W_OK):
-        log("Could not open output directory (%s) for writing.  Terminating." % output_dir)
-        sys.exit(-1)
-
-    # Check that the partial directory exists.  This is where publications-in-
-    # progress will be stored.
-    partial_dir = os.path.join(output_dir, 'partial')
-    if not os.path.isdir(partial_dir):
-        d('Partial directory does not exist (%s).  Creating...' % partial_dir)
-        os.mkdir(partial_dir)
-
-    # Acquire a lock on the output directory.  This prevents blocks from being
-    # parsed out of order.  The lock is released in the exit function when
-    # this instance terminates.
-    lock_file = os.path.join(output_dir, 'lockfile')
-    lock_fd = open(lock_file, 'w')
-    fcntl.lockf(lock_fd, fcntl.LOCK_EX)
-
-    d("Block hash: %s" % block_hash)
-
+    # Load all the partial files.
     partial_files = PartialFile.load_state_files(d, partial_dir)
     d("Loaded %d partial files" % len(partial_files))
 
+    # Get all the interesting TXIDs so we know what to look for in this block.
     interesting_txids = {}
     for partial_file in partial_files:
-        d("Interesting TXID: %s" % partial_file.get_previous_txid())
-        interesting_txids[partial_file.get_previous_txid()] = partial_file
-
+        previous_txids = partial_file.get_previous_txids()
+        for previous_txid in previous_txids:
+            d("Interesting TXID: %s" % previous_txid)
+            interesting_txids[previous_txid] = partial_file
 
     # Get the transactions in this block.  Loop through each one and parse it.
-    txids = rpc_client.getblock(block_hash)['tx']
+    txids = current_block['tx']
     for txid in txids:
-
         bytes_to_write = b''
         file_offset = -1
         partial_file = None
@@ -153,7 +118,6 @@ if __name__ == '__main__':
 
                         start_pos += 2
                         data_segment = scriptSig_bin[start_pos:start_pos + 32]
-                        d("data segment: %s" % binascii.hexlify(data_segment))
                         data += data_segment
                         start_pos += 32
 
@@ -229,7 +193,7 @@ if __name__ == '__main__':
                     # but there may be padding at this point still).
                     if partial_file.is_deadman_switch_key() and (len(data) >= 128):
                         log('DISCOVERED DEADMAN SWITCH KEY!: ' + binascii.hexlify(data).decode('ascii'))
-                        if decrypt_deadman_switch_file(data):
+                        if decrypt_deadman_switch_file(partial_files, data):
                             log('Successfully decrypted deadman switch file!')
                         else:
                             log('Failed to decrypt deadman switch file.')
@@ -249,24 +213,52 @@ if __name__ == '__main__':
                         data = Utils.get_data_from_scriptsig(d, scriptSig_bin)
                         partial_file = interesting_txids[vin_txid]
 
+                        termination_data = False
+                        noop_data = False
+
                         # Is this the termination data?
-                        if (data.find(Publication.HEADER_TERMINATE) == 0) and (len(data) >= (len(Publication.HEADER_TERMINATE) + 4 + 4 + 32 + 32 + 32)):
-                            data = data[len(Publication.HEADER_TERMINATE):]
-                            num_parallel_txs = struct.unpack('!I', data[0:4])[0]
+                        if (data.find(Publication.HEADER_TERMINATE) == 0) and (len(data) >= (len(Publication.HEADER_TERMINATE) + Publication.NONCE_LEN + 32 + 4 + 32 + 32 + 32)):
+
+                            ptr = len(Publication.HEADER_TERMINATE)
+                            nonce = data[ptr:ptr + Publication.NONCE_LEN]
+                            ptr += Publication.NONCE_LEN
+                            stored_nonce_hash = data[ptr:ptr + 32]
+
+                            computed_nonce_hash = hashlib.sha256(Publication.HEADER_TERMINATE + nonce + Publication.NONCE_SALT).digest()
+                            if computed_nonce_hash == stored_nonce_hash:
+                                termination_data = True
+
+                        # Is this a NOOP?
+                        elif (data.find(Publication.HEADER_NOOP) == 0) and (len(data) >= (len(Publication.HEADER_TERMINATE) + Publication.NONCE_LEN + 32)):
+                            ptr = len(Publication.HEADER_NOOP)
+                            nonce = data[ptr:ptr + Publication.NONCE_LEN]
+                            ptr += Publication.NONCE_LEN
+                            stored_nonce_hash = data[ptr:ptr + 32]
+
+                            computed_nonce_hash = hashlib.sha256(Publication.HEADER_NOOP + nonce + Publication.NONCE_SALT).digest()
+                            if computed_nonce_hash == stored_nonce_hash:
+                                noop_data = True
+                            else:
+                                d('NOOP nonce does not match.')
+
+
+                        if termination_data:
+                            # Skip the header, nonce, and nonce hash.
+                            data = data[len(Publication.HEADER_TERMINATE) + Publication.NONCE_LEN + 32:]
 
                             # Not currently used.
-                            reserved = data[4:8]
+                            reserved = data[0:4]
 
                             # This is the temporal key.  It is all zeros if
                             # encryption was disabled, or all ones if in
                             # deadman switch mode.
-                            temporal_key = data[8:40]
+                            temporal_key = data[4:36]
 
                             # These are not currently used.
-                            temporal_iv = data[40:72]
-                            temporal_extra = data[72:104]
+                            temporal_iv = data[36:68]
+                            temporal_extra = data[68:100]
 
-                            if partial_file.finalize(num_parallel_txs, temporal_key):
+                            if partial_file.finalize(temporal_key):
                                 log("Successfully retrieved file: %s" % partial_file)
                             else:
                                 log("Failed to retrieve file: %s" % partial_file)
@@ -275,12 +267,14 @@ if __name__ == '__main__':
                                 log("Deadman switch file retrieved.")
 
 
-                            del(interesting_txids[vin_txid])
                             partial_file = None
 
-                        # This is continuation data...
-                        else:
-                            partial_file.set_previous_txid(txid)
+                        elif noop_data: # Don't do anything special.
+                            partial_file.add_previous_txid(txid)
+                            partial_file.save_state()
+                            d('Found NOOP; adding: %s' % txid)
+                        else:  # This is continuation data...
+                            partial_file.add_previous_txid(txid)
 
                             if (file_offset == -1) and (len(data) > 4):
                                 file_offset = struct.unpack('!I', data[0:4])[0]
@@ -288,9 +282,140 @@ if __name__ == '__main__':
 
                             bytes_to_write += data
 
+                    else:
+                        d('vin_txid not in interesting IDs: %s' % vin_txid)
+
         # Once all inputs have been processed in this TXID...
         if file_offset >= 0 and bytes_to_write != b'' and \
            partial_file is not None:
             d("Writing %d bytes to offset %d: %s" % (len(bytes_to_write), file_offset, binascii.hexlify(bytes_to_write)))
             partial_file.write_data(bytes_to_write, file_offset)
             partial_file.save_state()
+
+
+# Save the block info into the lock file.
+def save_block_info(lock_fd, block_info):
+    lock_fd.seek(0)
+    lock_fd.truncate()
+    pickle.dump(block_info, lock_fd)
+    lock_fd.flush()
+
+
+# This script must be called as:
+#    python3 blockchain_watcher.py rpchostname rpcport rpcuser rpcpass
+#       /path/to/output_dir /path/to/log_file.txt block_hash_goes_here [-d]
+if __name__ == '__main__':
+
+    rpchost = sys.argv[1]
+    rpcport = sys.argv[2]
+    rpcuser = sys.argv[3]
+    rpcpass = sys.argv[4]
+    output_dir = sys.argv[5]
+    log_file = sys.argv[6]
+    current_block_hash = sys.argv[7]
+
+    rpc_client = RPCClient(rpchost, rpcport, rpcuser, rpcpass)
+
+    if len(sys.argv) == 9 and sys.argv[8] == '-d':
+        debug = True
+
+    # Acquire a lock on the output directory.  This prevents blocks from being
+    # parsed out of order.  The lock is released in the exit function when
+    # this instance terminates.
+    lock_file = os.path.join(output_dir, 'lockfile')
+    lock_fd = open(lock_file, 'a+b')
+    fcntl.lockf(lock_fd, fcntl.LOCK_EX)
+    lock_fd.seek(0)
+
+    # Open the log file for appending.  If this fails, terminate.
+    try:
+        fd = open(log_file, 'a')
+    except Exception as e:
+        sys.exit(-1)
+
+    # Register the exit function.  This will close the log file handle upon
+    # program termination.
+    atexit.register(exit_func)
+
+    # Ensure that the output directory is writable.
+    if not os.access(output_dir, os.W_OK):
+        log("Output directory (%s) is not writeable.  Terminating." % output_dir)
+        sys.exit(-1)
+
+    # Check that the partial directory exists.  This is where publications-in-
+    # progress will be stored.
+    partial_dir = os.path.join(output_dir, 'partial')
+    if not os.path.isdir(partial_dir):
+        d('Partial directory does not exist (%s).  Creating...' % partial_dir)
+        os.mkdir(partial_dir)
+
+    d("Block hash: %s" % current_block_hash)
+    current_block = rpc_client.getblock(current_block_hash)
+    current_block_num = int(current_block['height'])
+
+
+    # Well, it turns out that bitcoind/dogecoind does not always call this
+    # script with block numbers in their proper order.  The data writing logic
+    # handles this just fine, but if a block containing a header comes after
+    # a block with its data, this is a problem (similarly if a termination
+    # message comes before final data blocks).  So, the code below enforces a
+    # strict order.
+    #
+    # It will track what the last block number processed is, and will process
+    # the current one if it is the next in line.  Otherwise, it will save the
+    # block number and hash into the lockfile.  Later, when the proper block
+    # arrives, the saved subsequent block numbers/hashes are handled.
+    #
+    # Example: if block #10 was last processed, and block #12 arrives, block
+    # 12's hash will be stored in the lockfile and not immediately processed.
+    # Later, when #11 arrives, it is handled immediately, then #12 is also
+    # processed.
+
+    lock_data = lock_fd.read()
+
+    # If the lockfile is empty, handle this block and initialize the lockfile.
+    if len(lock_data) == 0:
+        d("Lock data is empty.  Initializing.")
+        handle_block(current_block_hash, current_block)
+        block_info = {'last_block_num_processed': current_block_num}
+
+    # The lockfile has data, so load it.
+    else:
+        block_info = pickle.loads(lock_data)
+
+        # Get the number of the last processed block.
+        last_block_num_processed = block_info['last_block_num_processed']
+
+        # If the current block number is not the next in line, store the
+        # current block number and hash into the lockfile.  We won't process
+        # this block right now.
+        if (last_block_num_processed + 1) != current_block_num:
+            d("Received out-of-order block: %d / %s; last processed: %d" % (current_block_num, current_block_hash, last_block_num_processed))
+            block_info[current_block_num] = current_block_hash
+
+        # Otherwise, the current block number is the next in line, so we will
+        # process it.
+        else:
+            d("Handling in-order block: %d / %s" % (current_block_num, current_block_hash))
+            handle_block(current_block_hash, current_block)
+            block_info['last_block_num_processed'] = current_block_num
+
+            # Check if the next block number is stored.  If so, we can process
+            # that now too.  Keep incrementing block numbers until we run out.
+            next_block_num = current_block_num + 1
+            while next_block_num in block_info:
+                next_block_hash = block_info[next_block_num]
+                d("Handling next block: %d / %s" % (next_block_num, next_block_hash))
+                handle_block(next_block_hash)
+
+                # Since we handled this block, we no longer need to track it.
+                del(block_info[next_block_num])
+
+                # Update the latest block we processed.
+                block_info['last_block_num_processed'] = next_block_num
+
+                next_block_num = next_block_num + 1
+
+    # Update the lock file with the latest block info.
+    save_block_info(lock_fd, block_info)
+    exit(0)

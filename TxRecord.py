@@ -17,9 +17,10 @@
 # This class maintains information for an individual transaction, such as the
 # TXID, redeem scripts, P2SH addresses, TXID and number of confirmations.
 class TxRecord:
-    def __init__(self, redeem_scripts, p2sh_addresses):
+    def __init__(self, redeem_scripts, p2sh_addresses, num_bytes):
         self.redeem_scripts = redeem_scripts
         self.p2sh_addresses = p2sh_addresses
+        self.num_bytes = num_bytes
 
         self.txid = None
         self.confirmations = 0
@@ -27,6 +28,7 @@ class TxRecord:
         self.vout_nums = []
         self.values = []
         self.last_record = False
+        self.total_amount = -1.0
 
     # Sets the TXID.
     def set_txid(self, txid):
@@ -66,6 +68,12 @@ class TxRecord:
 
     def is_last_record(self):
         return self.last_record
+
+    def get_total_amount(self):
+        return self.total_amount
+
+    def set_total_amount(self, amount):
+        self.total_amount = amount
 
     # Returns a string representation of this TxRecord.
     def __str__(self):

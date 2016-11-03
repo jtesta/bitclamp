@@ -99,7 +99,7 @@ class Utils:
         ext = filepath[dot_pos+1:].lower()
 
         # Is this a document?
-        if ext in ['pdf', 'docx', 'doc', 'pptx', 'ppt', 'xlsx', 'xls', 'odt', 'odp', 'ods']:
+        if ext in ['pdf', 'docx', 'doc', 'pptx', 'ppt', 'xlsx', 'xls', 'odt', 'odp', 'ods', 'txt']:
             return Publication.CONTENT_TYPE_DOCUMENT
 
         # Is this a picture?
@@ -120,7 +120,7 @@ class Utils:
 
         # Digital signature?
         elif ext in ['asc', 'sig']:
-            return Publication.CONTENT_TYPE_DIGITAL_SIGNATURE
+            return Publication.CONTENT_TYPE_DIGITALSIG
 
         # Archive?
         elif ext in ['tar', 'zip', 'bz2', 'gz', 'xz', '7z', 'lzma', 'iso', 'gpg', 'pgp']:
@@ -191,15 +191,12 @@ class Utils:
 
     # Estimates the cost and time to publish the specified file.  'filepath'
     # is the file to estimate, 'chain' is the blockchain to estimate (BTC or
-    # DOGE), 'num_outputs' is the number of outputs per transaction, and,
-    # optionally, 'estimate_with_fee' is the fee to calculate with (if None,
-    # the current network estimate is used).
-    #
-    # If 'estimate_with_fee' is not specified, and an estimate cannot be
-    # retrieved from the network, cost will be negative to signify an error.
-    #
+    # DOGE), 'num_outputs' is the number of outputs per transaction,
+    # 'num_concurrent_transactions' is the number of transactions transmitted
+    # per block, and, optionally, 'estimate_with_fee' is the fee to calculate
+    # with (if None, the current network estimate is used).
     @staticmethod
-    def get_estimate(rpc_client, filepath, chain, num_outputs, estimate_with_fee):
+    def get_estimate(rpc_client, filepath, chain, num_outputs, num_concurrent_transactions, estimate_with_fee):
         from Publication import Publication
 
         cost = 0.0
@@ -207,7 +204,8 @@ class Utils:
         ntransactions = 0
         size = None
 
-        if estimate_with_fee is None or estimate_with_fee < 0.0:
+        # No fee rate was given, so try to get it from the network.
+        if (estimate_with_fee is None) or (estimate_with_fee < 0.0):
             print("Getting fee estimate from network...")
             estimate_with_fee = rpc_client.estimatefee(1)
             if estimate_with_fee <= 0.0:
@@ -228,20 +226,103 @@ class Utils:
             size = "%d bytes" % nbytes
 
 
-        ntransactions = math.ceil(nbytes / (num_outputs * Publication.SINGLE_OUTPUT_SIZE))
-        cost = (ntransactions + 1) * (estimate_with_fee * ((num_outputs * Publication.SINGLE_OUTPUT_SIZE) / 1024))
+        total_num_transactions = math.ceil(nbytes / (num_outputs * Publication.SINGLE_OUTPUT_SIZE))
+        num_block_generations = math.ceil(total_num_transactions / num_concurrent_transactions)
 
-        # Add in the minimum we send per output.
-        cost = cost + (num_outputs * Publication.DUST_THRESHOLD)
+        # Another three blocks/transactions are needed for the header,
+        # termination, and change transactions.
+        num_block_generations += 3
+        total_num_transactions += 3
 
-        # Increase the cost by 25% to account for overhead.
-        # TODO: a more accurate method is needed here.
-        cost = cost * 1.25
+        # For multi-transaction publications, theres a NOOP transaction in the
+        # beginning and at the end.
+        if num_concurrent_transactions > 1:
+            num_block_generations += 2
+            total_num_transactions += 2
 
-        time = Publication.get_time_estimate(ntransactions, chain)
-        return cost, time, ntransactions, size, estimate_with_fee
+
+        # Notes from observation:
+        #   Beginning header is 104 bytes, 963 signed (sometimes 739).
+        #   Termination header is 148 bytes, 370 signed.
+        #   NOOP header is 48 bytes, 391 signed.
+
+        # Through observation, it appears that the file payload accounts for
+        # about 2/3rds of the size of the signed transaction.  In other words,
+        # when a transaction is carrying 2236 bytes (via 5 outputs), the signed
+        # transaction comes to about 3334 bytes (which is about 67%
+        # efficiency).  This ratio appears stable even for larger payloads;
+        # when transactions carry 4476 bytes (via 10 outputs), the signed
+        # transaction size is around 6657 bytes (also about 67% efficient).
+        # Hence the overhead multiplier to convert the file size bytes to
+        # signed transaction bytes is around 1.5.
+        #
+        # Also, we will add in the signed message sizes of the beginning header
+        # and terminating header.  These were seen to be 963 and 370,
+        # respectively, though we will round them up to 1024 and 512.
+        tx_bytes = math.ceil(nbytes * 1.5) + 1024 + 512
+
+        # When publishing with multiple transactions, NOOP messages are sent to
+        # split the header message into multiple generations.  These NOOPs were
+        # observed to be 391 bytes after signing, and we round them up to 512
+        # here.  Since this occurs once at the start of publication, and once
+        # at the end, this is multiplied by 2.
+        if num_concurrent_transactions > 1:
+            tx_bytes = tx_bytes + ((num_concurrent_transactions * 512) * 2)
+
+        # Multiply the kilobytes of signed data with the per-KB transaction
+        # fee rate.
+        transaction_fees = (tx_bytes / 1024) * estimate_with_fee
+
+        # Calculate the transaction fees for Dogecoin differently... because
+        # reasons.
+        if chain == Publication.BLOCKCHAIN_DOGE:
+            # Estimate the final size of each transaction (with sigs included).
+            tx_size = (num_outputs * Publication.SINGLE_OUTPUT_SIZE) * 1.5
+
+            # Estimate the fee needed per each transaction.
+            fee_per_tx = math.ceil(tx_size / 1024)
+
+            transaction_fees = total_num_transactions * fee_per_tx
+
+        # The estimated cost is the transaction fees, plus the amounts we are
+        # sending back and forth.  That is the dust threshold, times the number
+        # of outputs per transaction, times the number of concurrent
+        # transactions.  This amount is refundable at the end of publication.
+        refundable_amount = (num_concurrent_transactions * num_outputs * Publication.DUST_THRESHOLD)
+        publication_cost = transaction_fees + refundable_amount
+
+        # The 1.5 multiplier is more accurate for larger file publications, and
+        # not so accurate for smaller ones.  So we will scale up the estimate
+        # based on file size.
+        multiplier = 1.0
+
+        # Smaller than 10KB: 25% increase.
+        if nbytes < (1024 * 10):
+            multiplier = 1.25
+
+        # Smaller than 100KB: 20% increase.
+        elif nbytes < (1024 * 100):
+            multiplier = 1.20
+
+        # Smaller than 500KB: 15% increase.
+        elif nbytes < (1024 * 500):
+            multiplier = 1.15
+
+        # Larger than 500KB: 10% increase.
+        else:
+            multiplier = 1.10
+
+        publication_cost = publication_cost * multiplier
+
+        # Fees in dogecoin should all be rounded up.
+        if chain == Publication.BLOCKCHAIN_DOGE:
+            publication_cost = int(math.ceil(publication_cost))
+
+        time = Publication.get_time_estimate(num_block_generations, chain)
+        return publication_cost, transaction_fees, refundable_amount, multiplier, time, num_block_generations, size, estimate_with_fee
 
 
+    # Extracts data from a scriptsig.
     @staticmethod
     def get_data_from_scriptsig(d, scriptsig):
         ptr = 0

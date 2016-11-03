@@ -1,4 +1,4 @@
-IMPORTANT NOTE:  Bitclamp is currently in beta.  DO NOT publish anything of value until it reaches a stable release (approximately June 2016).  There is a 100% chance that content published before then will not be easily viewable or searchable due to upcoming changes to the data structures.
+IMPORTANT NOTE:  Bitclamp is currently in beta.  DO NOT publish anything of value until it reaches a stable release (approximately December 2016).  There is a 100% chance that content published before then will not be easily viewable or searchable due to upcoming changes to the data structures.
 
 ----
 
@@ -6,13 +6,13 @@ This tool publishes files into the blockchains of Bitcoin and Dogecoin.  While o
 
 Refer to the SETUP.txt file for instructions on how to get going with publishing and/or retrieving files.  Once that is complete, here is how to publish a file:
 
-   python3 bitclamp.py --chain=btc --file=SEKRUT_STUFF.pdf --change mhnd4a9CNE3TFDuMRMXVEGaYfkkCwAcFvv --rpcuser=bitcoin --rpcpass=supercalifragilistic --rpcport=8888
+   python3 bitclamp.py --chain=btc --file=SEKRUT_STUFF.pdf --change mhnd4a9CNE3TFDuMRMXVEGaYfkkCwAcFvv
 
 In the above example, --chain specifies what blockchain to use ("btc" or "doge"), --file is the file to publish, --change specifies where any leftover coins are to be sent after publication is complete, and the --rpc* options describe where the RPC server is (i.e.: the bitcoind/dogecoind process).
 
    bitclamp.py will respond with an address and amount to send:
 
-   $ python3 bitclamp.py --chain=btc --file=SEKRUT_STUFF.pdf --change mhnd4a9CNE3TFDuMRMXVEGaYfkkCwAcFvv --rpcuser=bitcoin --rpcpass=supercalifragilistic --rpcport=8888
+   $ python3 bitclamp.py --chain=btc --file=SEKRUT_STUFF.pdf --change mhnd4a9CNE3TFDuMRMXVEGaYfkkCwAcFvv
    Automatic detection of content type is: document
    To begin publication, send 0.00964845 BTC to 2MuVjWDrUpCGC4jAU12rhrCDeqEj5XDcuCQ
 

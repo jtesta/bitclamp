@@ -37,22 +37,26 @@ class PartialFile:
 
       self.file_ptr = 0
       self.block_acks = {}
-      self.previous_txid = self.initial_txid
+      self.previous_txids = [self.initial_txid]
       self.temporal_key = None
       self.num_parallel_txs = -1
       self.finalized = False
 
 
+   # Logs a debugging message.
    def d(self, s):
       self.debug_func(s)
 
 
-   def get_previous_txid(self):
-      return self.previous_txid
+   # Returns a list of TXIDs that previously held data for this file.
+   def get_previous_txids(self):
+      return self.previous_txids
 
 
-   def set_previous_txid(self, previous_txid):
-      self.previous_txid = previous_txid
+   # Adds a TXID that held data for this file.
+   def add_previous_txid(self, previous_txid):
+      if previous_txid not in self.previous_txids:
+         self.previous_txids.append(previous_txid)
 
 
    # Serialize this PartialFile to disk.
@@ -76,7 +80,6 @@ class PartialFile:
 
          self.d("Offset (%d) + data length (%d) is greater than file size (%d). Truncated data to %d" % (offset, len(data), self.file_size, truncated_len))
 
-         
 
       with open(self.file_path, 'a+b') as f:
          data_len = len(data)
@@ -148,15 +151,9 @@ class PartialFile:
    # in the partial directory.
    #
    # Returns True on success, or False on error.
-   def finalize(self, num_parallel_txs, temporal_key):
+   def finalize(self, temporal_key):
       from Publication import Publication
       from Utils import Utils
-
-      # When decrypting a deadman switch, the caller doesn't know what the
-      # num_parallel_txs encryption_type values were, so we use what we stored
-      # previously.
-      if num_parallel_txs is None:
-         num_parallel_txs = self.num_parallel_txs
 
       # If not all bytes were received, this is a failure.
       if (not self.is_complete()) and (not self.is_complete_deadman_switch_file()):
@@ -186,7 +183,6 @@ class PartialFile:
       if self.is_deadman_switch_file() and (temporal_key == (b'\xff' * 32)):
          # Save the num_parallel_txs and encryption_type so that when the key
          # is found in the future, we know how to decrypt this.
-         self.num_parallel_txs = num_parallel_txs
          self.save_state()
          return True
 
@@ -220,6 +216,7 @@ class PartialFile:
       return True
 
 
+   # Return a string representation of this PartialFile.
    def __str__(self):
       import base64
       from Publication import Publication
