@@ -14,8 +14,6 @@
 
 * Add a process to closely monitor unconfirmed transactions in mempool for deadman switch keys.
 
-* Make blockchain_watcher.py get credentials from bitcoin.conf instead of command line.
-
 * Add a timeout for PartialFiles.  After, say, X months of no activity and/or Y months since initializing, the publication should be considered failed and no longer tracked.
 
 * Clear interesting TXIDs from PartialFiles when deadman switch files are published.

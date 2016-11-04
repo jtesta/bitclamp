@@ -39,8 +39,11 @@ In the above example, --chain specifies what blockchain to use ("btc" or "doge")
 
 Currently, the only way to extract content from the blockchain is to run bitcoind/dogecoind and examine blocks in realtime.  Future versions of Bitclamp will allow the user to specify ranges to parse, along with searches based on filename, type, etc.
 
-To monitor the blockchain in realtime, run bitcoind/dogecoind with the following arguments:
+To monitor the BTC blockchain in realtime, run bitcoind with the following arguments:
 
-    bitcoind -txindex -rpcuser=bitcoin -rpcpassword=supercalifragilistic -rpcport=8889 -regtest -daemon -listen=0 -blocknotify="python3 /path/to/bitclamp/blockchain_watcher.py localhost 8889 bitcoin supercalifragilistic /path/to/output/directory/ /path/to/output_log.txt %s"
+    bitcoind -daemon -listen=0 -txindex -blocknotify="python3 /path/to/bitclamp/blockchain_watcher.py btc /path/to/btc/output/directory/ /path/to/btc/output_log.txt %s -d"
 
-And that's it.  The server will dump new files into /path/to/output/directory/.
+To monitor the DOGE blockchain in realtime, run dogecoind with:
+    dogecoind -daemon -listen=0 -txindex -blocknotify="python3 /path/to/bitclamp/blockchain_watcher.py doge /path/to/doge/output/directory/ /path/to/doge/output_log.txt %s -d"
+
+The servers will dump new files into /path/to/output/directory/.

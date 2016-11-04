@@ -62,42 +62,6 @@ def get_config_file(chain):
     return conf_file
 
 
-# Parses the ~/.bitcoin/bitcoin.conf or ~/.dogecoin/dogecoin.conf file for RPC
-# credentials.  Returns the RPC hostname, username, password, and port.
-def parse_config(conf_file):
-    rpchost = rpcuser = rpcpassword = rpcport = None
-
-    if not os.path.isfile(conf_file):
-        print("Error: could not find config file: %s" % conf_file)
-        sys.exit(-1)
-
-    # Read in the entire config file.
-    conf_lines = None
-    with open(conf_file, 'r') as f:
-        conf_lines = f.readlines()
-
-    # Parse each line in the config file.
-    for line in conf_lines:
-        # Split each line into a key/value pair.
-        kv = line.split('=')
-        if len(kv) != 2:
-            continue
-
-        key = kv[0].strip()
-        val = kv[1].strip()
-
-        if key.startswith('rpchost'):
-            rpchost = val
-        elif key.startswith('rpcuser'):
-            rpcuser = val
-        elif key.startswith('rpcpassword'):
-            rpcpass = val
-        elif key.startswith('rpcport'):
-            rpcport = int(val)
-
-    return rpchost, rpcuser, rpcpass, rpcport
-
-
 parser = argparse.ArgumentParser()
 
 # (Mostly) required arguments.
@@ -241,9 +205,7 @@ rpcpass = xrpcpass
 if (xrpcuser == '') or (xrpcpass == ''):
     config_file = get_config_file(chain)
 
-    rpchost, rpcuser, rpcpass, rpcport = parse_config(config_file)
-    rpchost = rpchost if rpchost != None else 'localhost'
-
+    rpchost, rpcport, rpcuser, rpcpass = Utils.parse_config_file(config_file)
     if (rpcuser is None) or (rpcpass is None):
         print("Error: config file (%s) not found, and --rpcXXX options not set." % config_file)
         sys.exit(-1)

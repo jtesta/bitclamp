@@ -405,6 +405,44 @@ class Utils:
         return ret
 
 
+    # Parses the ~/.bitcoin/bitcoin.conf or ~/.dogecoin/dogecoin.conf file for
+    # RPC credentials.  Returns the RPC hostname, username, password, and port.
+    @staticmethod
+    def parse_config_file(conf_file):
+        rpchost = 'localhost'
+        rpcuser = rpcpassword = rpcport = None
+
+        if not os.path.isfile(conf_file):
+            print("Error: could not find config file: %s" % conf_file)
+            sys.exit(-1)
+
+        # Read in the entire config file.
+        conf_lines = None
+        with open(conf_file, 'r') as f:
+            conf_lines = f.readlines()
+
+        # Parse each line in the config file.
+        for line in conf_lines:
+            # Split each line into a key/value pair.
+            kv = line.split('=')
+            if len(kv) != 2:
+                continue
+
+            key = kv[0].strip()
+            val = kv[1].strip()
+
+            if key.startswith('rpchost'):
+                rpchost = val
+            elif key.startswith('rpcuser'):
+                rpcuser = val
+            elif key.startswith('rpcpassword'):
+                rpcpass = val
+            elif key.startswith('rpcport'):
+                rpcport = int(val)
+
+        return rpchost, rpcport, rpcuser, rpcpass
+
+
     # Executes an external program and returns a tuple containing its stdout
     # and stderr bytes.
     @staticmethod
@@ -420,6 +458,7 @@ class Utils:
 
 
     # Runs GPG to encrypt or decrypt bytes using key_bytes.
+    @staticmethod
     def exec_gpg2(args, file_bytes, key_bytes):
 
         if len(key_bytes) != 32:

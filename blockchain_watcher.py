@@ -69,6 +69,19 @@ def decrypt_deadman_switch_file(partial_files, data):
     return False
 
 
+# Returns an RPCClient.
+def get_rpc_client(chain):
+    # Get the path to the config file.
+    config_file = "%s/.bitcoin/bitcoin.conf" % os.path.expanduser("~")
+    if chain == 'doge':
+        config_file = "%s/.dogecoin/dogecoin.conf" % os.path.expanduser("~")
+
+    # Parse the config file's connection info, and use it to create the
+    # RPCClient.
+    rpchost, rpcport, rpcuser, rpcpass = Utils.parse_config_file(config_file)
+    return RPCClient(rpchost, rpcport, rpcuser, rpcpass)
+
+
 # Processes a block by inspecting its transactions and parsing any included
 # data.
 def handle_block(current_block_num, current_block_hash, current_block = None):
@@ -302,21 +315,20 @@ def save_block_info(lock_fd, block_info):
 
 
 # This script must be called as:
-#    python3 blockchain_watcher.py rpchostname rpcport rpcuser rpcpass
-#       /path/to/output_dir /path/to/log_file.txt block_hash_goes_here [-d]
+#    python3 blockchain_watcher.py [btc | doge] /path/to/output_dir
+#       /path/to/log_file.txt block_hash_goes_here [-d]
 if __name__ == '__main__':
 
-    rpchost = sys.argv[1]
-    rpcport = sys.argv[2]
-    rpcuser = sys.argv[3]
-    rpcpass = sys.argv[4]
-    output_dir = sys.argv[5]
-    log_file = sys.argv[6]
-    current_block_hash = sys.argv[7]
+    chain = sys.argv[1]
+    output_dir = sys.argv[2]
+    log_file = sys.argv[3]
+    current_block_hash = sys.argv[4]
 
-    rpc_client = RPCClient(rpchost, rpcport, rpcuser, rpcpass)
+    if not ((chain == 'btc') or (chain == 'doge')):
+        print("ERROR: first argument must be 'btc' or 'doge': %s" % chain)
+        exit(-1)
 
-    if len(sys.argv) == 9 and sys.argv[8] == '-d':
+    if len(sys.argv) == 6 and sys.argv[5] == '-d':
         debug = True
 
     # Acquire a lock on the output directory.  This prevents blocks from being
@@ -332,6 +344,9 @@ if __name__ == '__main__':
         fd = open(log_file, 'a')
     except Exception as e:
         sys.exit(-1)
+
+    # Get an RPCClient to work with.
+    rpc_client = get_rpc_client(chain)
 
     # Register the exit function.  This will close the log file handle upon
     # program termination.
