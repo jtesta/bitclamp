@@ -18,6 +18,7 @@
 # a subset of what are available from the 'bitcoin-cli' command-line tool.
 
 import base64, json, urllib.request
+from Utils import *
 
 class RPCClient:
 
@@ -76,6 +77,10 @@ class RPCClient:
         return int(self.send_request('getblockcount'))
 
 
+    def getblockhash(self, index):
+        return self.send_request('getblockhash', [index])
+
+
     def getconnectioncount(self):
         return int(self.send_request('getconnectioncount'))
 
@@ -98,3 +103,19 @@ class RPCClient:
 
     def validateaddress(self, address):
         return self.send_request('validateaddress', [address])
+
+
+    # Creates and returns a new RPCClient using credentials from the
+    # bitcoin.conf/dogecoin.conf configuration file.  The 'chain' argument must
+    # be either 'btc' or 'doge' to determine which to use.
+    @staticmethod
+    def init_from_config_file(chain):
+        from os.path import expanduser
+
+        # Get the path to the config file.
+        config_file = "%s/.bitcoin/bitcoin.conf" % expanduser("~")
+        if chain == 'doge':
+            config_file = "%s/.dogecoin/dogecoin.conf" % expanduser("~")
+
+        rpchost, rpcport, rpcuser, rpcpass = Utils.parse_config_file(config_file)
+        return RPCClient(rpchost, rpcport, rpcuser, rpcpass)

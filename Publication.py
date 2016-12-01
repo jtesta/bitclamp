@@ -206,7 +206,7 @@ class Publication:
         # out.
         if self.content_type == Publication.CONTENT_TYPE_RESERVED:
             self.content_type = Utils.find_content_type(self.filepath)
-            print("Automatic detection of content type is: %s" % Publication.get_content_str(self.content_type))
+            print("Automatic detection of content type is: %s" % Publication.get_content_type_str(self.content_type))
 
             if self.content_type == Publication.CONTENT_TYPE_UNDEFINED:
                 print("\nError: could not determine content type of file.  You must re-run the program with --content-type and manually set the type.\n")
@@ -1253,20 +1253,42 @@ class Publication:
 
     # Given a CONTENT_TYPE_ constant, return its string representation.
     @staticmethod
-    def get_content_str(content_type):
+    def get_content_type_str(content_type):
         if content_type not in Publication.CONTENT_TYPE_MAP:
             return 'unknown'
 
         return Publication.CONTENT_TYPE_MAP[content_type]
 
 
+    # Given a content type string, return its CONTENT_TYPE_* constant, or
+    # False if invalid.
+    @staticmethod
+    def get_content_type_const(content_type_str):
+        ctypes = {v: k for k, v in Publication.CONTENT_TYPE_MAP.items()}
+        if content_type_str not in ctypes:
+            return False
+
+        return ctypes[content_type_str]
+
+
     # Given a COMPRESSION_TYPE_ constant, return its string representation.
     @staticmethod
-    def get_compression_str(compression_type):
+    def get_compression_type_str(compression_type):
         if compression_type not in Publication.COMPRESSION_TYPE_MAP_STR:
             return 'unknown'
 
         return Publication.COMPRESSION_TYPE_MAP_STR[compression_type]
+
+
+    # Given a compression type string, return its COMPRESSTION_TYPE_* constant,
+    # or False if invalid.
+    @staticmethod
+    def get_compression_type_const(compression_type_str):
+        ctypes = {v: k for k, v in Publication.COMPRESSION_TYPE_MAP_STR.items()}
+        if compression_type_str not in ctypes:
+            return False
+
+        return ctypes[compression_type_str]
 
 
     # Given an ENCRYPTION_TYPE_ constant, return its string representation.

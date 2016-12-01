@@ -230,6 +230,11 @@ def init_utils(code_dir, chain):
   if os.path.isfile(log_file):
     os.remove(log_file)
 
+  # Delete the lock file in the reader's output directory, if it exists.
+  lock_file = os.path.join(reader_outputdir, 'lockfile')
+  if os.path.isfile(lock_file):
+    os.remove(lock_file)
+
   # Get the path to bitclamp.py.
   bitclamp_py = os.path.join(code_dir, 'bitclamp.py')
   if not os.path.isfile(bitclamp_py):

@@ -16,7 +16,7 @@
 
 # This class represents a partial file in the blockchain.
 
-import binascii, hashlib, mmap, os, pickle
+import binascii, fcntl, hashlib, mmap, os, pickle
 
 class PartialFile:
    def __init__(self, debug_func, initial_txid, output_dir, partial_dir, sanitized_filename, description, file_size, general_flags, encryption_type, content_type, compression_type, file_hash, initial_block_num):
@@ -36,7 +36,7 @@ class PartialFile:
       self.initial_block_num = initial_block_num
 
       # The block number of the last write operation.
-      self.last_write_block_num = initial_block_num
+      self.final_block_num = -1
 
       self.file_path = PartialFile.get_unique_filepath(initial_txid, partial_dir, sanitized_filename)
       self.state_file = self.file_path + '.state'
@@ -81,9 +81,6 @@ class PartialFile:
       elif len(data) == 0:
          raise Exception("Data length is 0!")
 
-      # Update the block number of the last write operation.
-      if block_num > self.last_write_block_num:
-         self.last_write_block_num = block_num
 
       if offset + len(data) > self.file_size:
          truncated_len = self.file_size - offset
@@ -93,6 +90,8 @@ class PartialFile:
 
 
       with open(self.file_path, 'a+b') as f:
+         fcntl.lockf(f, fcntl.LOCK_EX)
+
          data_len = len(data)
 
          f.seek(0, os.SEEK_END)
@@ -162,7 +161,7 @@ class PartialFile:
    # in the partial directory.
    #
    # Returns True on success, or False on error.
-   def finalize(self, temporal_key):
+   def finalize(self, temporal_key, block_num):
       from Publication import Publication
       from Utils import Utils
 
@@ -194,6 +193,7 @@ class PartialFile:
       if self.is_deadman_switch_file() and (temporal_key == (b'\xff' * 32)):
          # Save the num_parallel_txs and encryption_type so that when the key
          # is found in the future, we know how to decrypt this.
+         self.final_block_num = block_num
          self.save_state()
          return True
 
@@ -222,6 +222,9 @@ class PartialFile:
       # Delete the state file.
       os.unlink(self.state_file)
 
+      # Update the final block number.
+      self.final_block_num = block_num
+
       # Mark as finalized and return success.
       self.finalized = True
       return True
@@ -244,7 +247,7 @@ class PartialFile:
       if self.temporal_key is not None:
          s = "Temporal Key: %s\n" % binascii.hexlify(self.temporal_key).decode('ascii')
 
-      return "PartialFile:\n\tInitial TXID: %s\n\tSanitized filename: %s\n\tDescription: %s\n\tFile size: %d\n\tEncryption type: %s\n\tContent type: %s\n\tCompression type: %s\n\t%s\n\tFile hash: %s\n\tFile pointer: %d\n\tACK Window: %s\n\t%s\n\tInitial block number: %d\n\tBlock number of last write: %d\n\tIs deadman switch file: %s\n\tIs deadman switch key: %s\n\tIs complete deadman switch file: %r\n\tIs complete: %r\n" % (self.initial_txid, self.sanitized_filename, self.description, self.file_size, Publication.get_encryption_str(self.encryption_type), Publication.get_content_str(self.content_type), Publication.get_compression_str(self.compression_type), general_flags_str, binascii.hexlify(self.file_hash).decode('ascii'), self.file_ptr, self.block_acks, s, self.initial_block_num, self.last_write_block_num, self.is_deadman_switch_file(), self.is_deadman_switch_key(), self.is_complete_deadman_switch_file(), self.is_complete())
+      return "PartialFile:\n\tInitial TXID: %s\n\tSanitized filename: %s\n\tDescription: %s\n\tFile size: %d\n\tEncryption type: %s\n\tContent type: %s\n\tCompression type: %s\n\t%s\n\tFile hash: %s\n\tFile pointer: %d\n\tACK Window: %s\n\t%s\n\tInitial block number: %d\n\tFinal block number: %d\n\tIs deadman switch file: %s\n\tIs deadman switch key: %s\n\tIs complete deadman switch file: %r\n\tIs complete: %r\n" % (self.initial_txid, self.sanitized_filename, self.description, self.file_size, Publication.get_encryption_str(self.encryption_type), Publication.get_content_type_str(self.content_type), Publication.get_compression_type_str(self.compression_type), general_flags_str, binascii.hexlify(self.file_hash).decode('ascii'), self.file_ptr, self.block_acks, s, self.initial_block_num, self.final_block_num, self.is_deadman_switch_file(), self.is_deadman_switch_key(), self.is_complete_deadman_switch_file(), self.is_complete())
 
 
    # Return a unique filepath to use for a new file, based on the TXID and

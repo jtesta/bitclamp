@@ -50,18 +50,6 @@ def signal_handler(signum, frame):
     exit(0)
 
 
-# Returns the config file ("/home/currentuser/.bitcoin/bitcoin.conf" or
-# "/home/currentuser/.dogecoin/dogecoin.conf") for the specified chain.
-def get_config_file(chain):
-    from os.path import expanduser
-
-    conf_file = "%s/.bitcoin/bitcoin.conf" % expanduser("~")
-    if chain == Publication.BLOCKCHAIN_DOGE:
-        conf_file = "%s/.dogecoin/dogecoin.conf" % expanduser("~")
-
-    return conf_file
-
-
 parser = argparse.ArgumentParser()
 
 # (Mostly) required arguments.
@@ -94,12 +82,6 @@ parser.add_argument('-d', '--debug', help='enable debugging messages', action='s
 parser.add_argument('--testnet', help='use the test network instead of production network (mainnet)', action='store_true')
 parser.add_argument('--regtest', help='enable regression test mode (for debugging & development only)', action='store_true')
 
-# RPC client options.
-parser.add_argument('--rpchost', help='the hostname of the Bitcoin RPC server to use', default='')
-parser.add_argument('--rpcport', help='the port of the Bitcoin RPC server to use', default=0)
-parser.add_argument('--rpcuser', help='the username to authenticate as against the Bitcoin RPC server', default='')
-parser.add_argument('--rpcpass', help='the password to authenticate as against the Bitcoin RPC server', default='')
-
 # Hidden options for unit testing.
 parser.add_argument('--unittest-publication-address', help=argparse.SUPPRESS, default=None)
 
@@ -129,11 +111,6 @@ deadman_switch_save = args['deadman_switch_save']
 deadman_switch_publish = args['deadman_switch_publish']
 
 unittest_publication_address = args['unittest_publication_address']
-
-xrpchost = args['rpchost']
-xrpcport = int(args['rpcport'])
-xrpcuser = args['rpcuser']
-xrpcpass = args['rpcpass']
 
 
 # Debug mode implies verbose mode.
@@ -189,32 +166,14 @@ if restore is not None:
 if chain.lower() == 'btc':
     chain = Publication.BLOCKCHAIN_BTC
 elif chain.lower() == 'doge':
-     chain = Publication.BLOCKCHAIN_DOGE   
+    chain = Publication.BLOCKCHAIN_DOGE
 else:
     print("Invalid chain: %s.  Valid values are 'btc' or 'doge'." % chain)
     sys.exit(-1)
 
 
-rpchost = xrpchost if xrpchost != '' else 'localhost'
-rpcport = xrpcport
-rpcuser = xrpcuser
-rpcpass = xrpcpass
-
-# If no RPC user or password was given, try to parse the config file
-# (i.e.: ~/.bitcoin/bitcoin.conf or ~/.dogecoin/dogecoin.conf).
-if (xrpcuser == '') or (xrpcpass == ''):
-    config_file = get_config_file(chain)
-
-    rpchost, rpcport, rpcuser, rpcpass = Utils.parse_config_file(config_file)
-    if (rpcuser is None) or (rpcpass is None):
-        print("Error: config file (%s) not found, and --rpcXXX options not set." % config_file)
-        sys.exit(-1)
-
-    d('Read from %s: rpchost: %s, rpcuser: %s, rpcpass: %s**********, rpcport: %s' % (config_file, rpchost, rpcuser, rpcpass[:3], rpcport))
-
-
-# Create a connection to the RPC server.
-rpc_client = RPCClient(rpchost, rpcport, rpcuser, rpcpass)
+# Create the RPC client from the local config file (bitcoin.conf/dogecoin.conf).
+rpc_client = RPCClient.init_from_config_file('btc' if chain == Publication.BLOCKCHAIN_BTC else 'doge')
 
 
 # --testnet and --regtest are mutually exclusive.
@@ -258,22 +217,19 @@ if connection_count < 1:
 # option parsing.
 if deadman_switch_publish is None:
 
-    # Ensure that the --content-type argument is valid.
-    ctypes = {v: k for k, v in Publication.CONTENT_TYPE_MAP.items()}
-    if content_type not in ctypes:
+    # Ensure that the --content-type argument is valid and get its
+    # Publication.CONTENT_TYPE_* ID.
+    content_type_const = Publication.get_content_type_const(content_type)
+    if content_type_const is False:
         print("Error: %s is not a valid content type." % content_type)
         sys.exit(-1)
 
-    content_type_const = ctypes[content_type]
-
-    # Ensure that the --compression argument is valid.
-    ctypes = {v: k for k, v in Publication.COMPRESSION_TYPE_MAP_STR.items()}
-    if compression not in ctypes:
+    # Ensure that the --compression argument is valid and get its
+    # Publication.COMPRESSION_TYPE_* ID.
+    compression_type_const = Publication.get_compression_type_const(compression)
+    if compression_type_const is False:
         print("Error: %s is not a valid compression type." % compression)
         sys.exit(-1)
-
-    compression_const = ctypes[compression]
-
 
 # If --estimate was given, and the user gave the file to estimate with...
 if estimate is True:
@@ -347,7 +303,7 @@ if (deadman_switch_save is not None) and os.path.isfile(deadman_switch_save):
     sys.exit(-1)
 
 
-publication = Publication(rpc_client, filepath, content_type_const, compression_const, filename, file_description, nocrypto, nohash, deadman_switch_save, chain, testnet or regtest, num_outputs, num_transactions, txfee, change_address, debug, verbose, unittest_publication_address)
+publication = Publication(rpc_client, filepath, content_type_const, compression_type_const, filename, file_description, nocrypto, nohash, deadman_switch_save, chain, testnet or regtest, num_outputs, num_transactions, txfee, change_address, debug, verbose, unittest_publication_address)
 
 # Register signal handlers.  This will save the state so that publication may
 # be fully restored and resumed later.
