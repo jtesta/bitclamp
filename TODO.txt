@@ -20,8 +20,6 @@
 
 * Continuation messages should have nonce for unencrypted publications.
 
-* Nonces should be larger.
-
 * Try to delete interesting TXIDs in blockchain_watcher.py after they are used, if possible.
 
 * Add unit tests:
