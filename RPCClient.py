@@ -118,4 +118,10 @@ class RPCClient:
             config_file = "%s/.dogecoin/dogecoin.conf" % expanduser("~")
 
         rpchost, rpcport, rpcuser, rpcpass = Utils.parse_config_file(config_file)
+        if rpcport is None:
+            if chain == 'doge':
+                rpcport = 22555
+            else:
+                rpcport = 8332
+
         return RPCClient(rpchost, rpcport, rpcuser, rpcpass)
