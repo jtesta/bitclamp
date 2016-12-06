@@ -941,44 +941,41 @@ class Publication:
         p2sh_addresses = []
 
         file_pos = self.get_file_position()
-        bytes_to_read = 0
-
-        self.d("Seeking to file position %d." % self.get_file_position())
-
-        # Calculate the number of bytes to publish now.  This is set to
-        # self.num_bytes_per_tx, unless the remaining bytes is smaller.
-        bytes_to_read = self.num_bytes_per_tx
-        if (file_pos + bytes_to_read) > self.filesize:
-            bytes_to_read = self.filesize - file_pos
-            self.end_of_file_reached = True
-        elif (file_pos + bytes_to_read) == self.filesize:
-            self.end_of_file_reached = True
 
         # Pack the file position integer into bytes to insert into the message.
-        file_offset = struct.pack('!I', file_pos)
+        file_offset_packed = struct.pack('!I', file_pos)
 
-        # Construct the block of data.
-        next_block = file_offset + self.file_bytes[file_pos:file_pos + bytes_to_read]
-        self.d("Next block: %s" % binascii.hexlify(next_block).decode('ascii'))
+        total_bytes_read = 0
+        for i in range(0, self.num_outputs):
+            next_block = b''
 
-        next_block_len = len(next_block)
-        noutputs = int(min(self.num_outputs, math.ceil(next_block_len / Publication.SINGLE_OUTPUT_SIZE)))
-        if noutputs != self.num_outputs:
-            self.d("File does not align to %d boundary (%d); using %d outputs instead of %d." % (Publication.SINGLE_OUTPUT_SIZE, next_block_len, noutputs, self.num_outputs))
+            # If we are doing a plaintext publication, prepend a nonce to
+            # each output.
+            if self.nocrypto:
+              next_block = os.urandom(Publication.NONCE_LEN)
 
-        # Create output addresses & corresponding redeemscripts
-        start_pos = 0
-        end_pos = Publication.SINGLE_OUTPUT_SIZE
-        for i in range(0, noutputs):
-            redeem_script, p2sh_address = self.make_redeem_script(next_block[start_pos:end_pos])
+            # Include the offset if this is the first output in a transaction.
+            if i == 0:
+              next_block += file_offset_packed
+
+            num_bytes_to_read = Publication.SINGLE_OUTPUT_SIZE - len(next_block)
+            if file_pos + total_bytes_read + num_bytes_to_read >= len(self.file_bytes):
+                num_bytes_to_read = len(self.file_bytes) - file_pos
+                self.end_of_file_reached = True
+
+            next_block += self.file_bytes[file_pos + total_bytes_read:file_pos + total_bytes_read + num_bytes_to_read]
+
+            redeem_script, p2sh_address = self.make_redeem_script(next_block)
             redeem_scripts.append(redeem_script)
             p2sh_addresses.append(p2sh_address)
 
-            start_pos += Publication.SINGLE_OUTPUT_SIZE
-            end_pos += Publication.SINGLE_OUTPUT_SIZE
+            total_bytes_read += num_bytes_to_read
 
-        self.update_unconfirmed_bytes(bytes_to_read)
-        return TxRecord(redeem_scripts, p2sh_addresses, bytes_to_read)
+            if self.end_of_file_reached:
+              break
+
+        self.update_unconfirmed_bytes(total_bytes_read)
+        return TxRecord(redeem_scripts, p2sh_addresses, total_bytes_read)
 
 
     # Transmits a transaction.

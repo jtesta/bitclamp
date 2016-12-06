@@ -324,7 +324,7 @@ class Utils:
 
     # Extracts data from a scriptsig.
     @staticmethod
-    def get_data_from_scriptsig(d, scriptsig):
+    def get_data_from_scriptsig(d, scriptsig, has_nonces):
         ptr = 0
         data_blocks = []
 
@@ -398,11 +398,30 @@ class Utils:
         # Remove the first data block, since this has the legit key instead
         # of data.
         data_blocks = data_blocks[1:]
-        ret = b''
-        for data_block in data_blocks:
-            ret += data_block
 
-        return ret
+        # The raw data.
+        ret_raw = b''
+
+        # The data with potential nonces stripped out (nonces are only added
+        # for plaintext data streams).
+        ret_no_nonces = b''
+
+        # If has_nonces is True (i.e.: the file is published in plaintext),
+        # we will strip out the nonces.  Otherwise, both return values will
+        # be exactly the same.
+        nonce_len = 0
+        if has_nonces:
+            from Publication import Publication
+            nonce_len = Publication.NONCE_LEN
+
+        for data_block in data_blocks:
+            ret_raw += data_block
+
+        # Strip out any nonces, if necessary.
+        if len(ret_raw) > nonce_len:
+            ret_no_nonces = ret_raw[nonce_len:]
+
+        return ret_raw, ret_no_nonces
 
 
     # Parses the ~/.bitcoin/bitcoin.conf or ~/.dogecoin/dogecoin.conf file for

@@ -196,7 +196,7 @@ class BlockParser:
                                 BlockParser.log('Failed to decrypt deadman switch file.')
                         else:
                             BlockParser.log("Discovered publication: %s" % partial_file)
-                            partial_file.write_data(data, 0, current_block_num)
+                            partial_file.write_data(data, 0)
                             partial_file.save_state()
                             partial_file = None
 
@@ -206,30 +206,35 @@ class BlockParser:
                     # need to extract.
                     else:
                         if vin_txid in interesting_txids:
-                            data = Utils.get_data_from_scriptsig(BlockParser.d, scriptSig_bin)
                             partial_file = interesting_txids[vin_txid]
 
+                            # Get the raw data, as well as data with potential
+                            # nonces stripped out (they are only present during
+                            # plaintext publications).  Termination and NOOP
+                            # never have additional nonces, hence searching for
+                            # them must be done on 'data_raw'.
+                            data_raw, data_processed = Utils.get_data_from_scriptsig(BlockParser.d, scriptSig_bin, partial_file.is_plaintext_file())
                             termination_data = False
                             noop_data = False
 
                             # Is this the termination data?
-                            if (data.find(Publication.HEADER_TERMINATE) == 0) and (len(data) >= (len(Publication.HEADER_TERMINATE) + Publication.NONCE_LEN + 32 + 4 + 32 + 32 + 32)):
+                            if (data_raw.find(Publication.HEADER_TERMINATE) == 0) and (len(data_raw) >= (len(Publication.HEADER_TERMINATE) + Publication.NONCE_LEN + 32 + 4 + 32 + 32 + 32)):
 
                                 ptr = len(Publication.HEADER_TERMINATE)
-                                nonce = data[ptr:ptr + Publication.NONCE_LEN]
+                                nonce = data_raw[ptr:ptr + Publication.NONCE_LEN]
                                 ptr += Publication.NONCE_LEN
-                                stored_nonce_hash = data[ptr:ptr + 32]
+                                stored_nonce_hash = data_raw[ptr:ptr + 32]
 
                                 computed_nonce_hash = hashlib.sha256(Publication.HEADER_TERMINATE + nonce + Publication.NONCE_SALT).digest()
                                 if computed_nonce_hash == stored_nonce_hash:
                                     termination_data = True
 
                             # Is this a NOOP?
-                            elif (data.find(Publication.HEADER_NOOP) == 0) and (len(data) >= (len(Publication.HEADER_TERMINATE) + Publication.NONCE_LEN + 32)):
+                            elif (data_raw.find(Publication.HEADER_NOOP) == 0) and (len(data_raw) >= (len(Publication.HEADER_NOOP) + Publication.NONCE_LEN + 32)):
                                 ptr = len(Publication.HEADER_NOOP)
-                                nonce = data[ptr:ptr + Publication.NONCE_LEN]
+                                nonce = data_raw[ptr:ptr + Publication.NONCE_LEN]
                                 ptr += Publication.NONCE_LEN
-                                stored_nonce_hash = data[ptr:ptr + 32]
+                                stored_nonce_hash = data_raw[ptr:ptr + 32]
 
                                 computed_nonce_hash = hashlib.sha256(Publication.HEADER_NOOP + nonce + Publication.NONCE_SALT).digest()
                                 if computed_nonce_hash == stored_nonce_hash:
@@ -240,19 +245,19 @@ class BlockParser:
 
                             if termination_data:
                                 # Skip the header, nonce, and nonce hash.
-                                data = data[len(Publication.HEADER_TERMINATE) + Publication.NONCE_LEN + 32:]
+                                data_raw = data_raw[len(Publication.HEADER_TERMINATE) + Publication.NONCE_LEN + 32:]
 
                                 # Not currently used.
-                                reserved = data[0:4]
+                                reserved = data_raw[0:4]
 
                                 # This is the temporal key.  It is all zeros if
                                 # encryption was disabled, or all ones if in
                                 # deadman switch mode.
-                                temporal_key = data[4:36]
+                                temporal_key = data_raw[4:36]
 
                                 # These are not currently used.
-                                temporal_iv = data[36:68]
-                                temporal_extra = data[68:100]
+                                temporal_iv = data_raw[36:68]
+                                temporal_extra = data_raw[68:100]
 
                                 if partial_file.finalize(temporal_key, current_block_num):
                                     BlockParser.log("Successfully retrieved file: %s" % partial_file)
@@ -272,11 +277,11 @@ class BlockParser:
                             else:  # This is continuation data...
                                 partial_file.add_previous_txid(txid)
 
-                                if (file_offset == -1) and (len(data) > 4):
-                                    file_offset = struct.unpack('!I', data[0:4])[0]
-                                    data = data[4:]
+                                if (file_offset == -1) and (len(data_processed) > 4):
+                                    file_offset = struct.unpack('!I', data_processed[0:4])[0]
+                                    data_processed = data_processed[4:]
 
-                                bytes_to_write += data
+                                bytes_to_write += data_processed
 
                         else:
                             BlockParser.d('vin_txid not in interesting IDs: %s' % vin_txid)
@@ -284,6 +289,6 @@ class BlockParser:
             # Once all inputs have been processed in this TXID...
             if file_offset >= 0 and bytes_to_write != b'' and \
                partial_file is not None:
-                BlockParser.d("Writing %d bytes to offset %d: %s" % (len(bytes_to_write), file_offset, binascii.hexlify(bytes_to_write)))
-                partial_file.write_data(bytes_to_write, file_offset, current_block_num)
+                BlockParser.d("Writing %d bytes to offset %d." % (len(bytes_to_write), file_offset))
+                partial_file.write_data(bytes_to_write, file_offset)
                 partial_file.save_state()

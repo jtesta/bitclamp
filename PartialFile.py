@@ -73,7 +73,7 @@ class PartialFile:
 
 
    # Write data from the blockchain into the local file.
-   def write_data(self, data, offset, block_num):
+   def write_data(self, data, offset):
       if offset > self.file_size:
          raise Exception("Offset (%d) is larger than file size (%d)!" % (offset, self.file_size))
       elif offset < 0:
@@ -84,9 +84,10 @@ class PartialFile:
 
       if offset + len(data) > self.file_size:
          truncated_len = self.file_size - offset
-         data = data[0:truncated_len]
 
          self.d("Offset (%d) + data length (%d) is greater than file size (%d). Truncated data to %d" % (offset, len(data), self.file_size, truncated_len))
+
+         data = data[0:truncated_len]
 
 
       with open(self.file_path, 'a+b') as f:
@@ -99,7 +100,7 @@ class PartialFile:
          if offset + data_len > size:
             change = (offset + data_len - size)
             self.d("Enlarging the file by %d bytes." % change)
-            f.write(b'\x00' * change)
+            f.write(b'\xff' * change)
             f.flush()
 
          mm = mmap.mmap(f.fileno(), 0)
@@ -153,6 +154,12 @@ class PartialFile:
    # Returns True if this file is completely published, except for the deadman switch key.
    def is_complete_deadman_switch_file(self):
       return True if self.is_deadman_switch_file() and (self.file_ptr == self.file_size) else False
+
+
+   # Returns True if this file is being published in plaintext.
+   def is_plaintext_file(self):
+      from Publication import Publication
+      return self.encryption_type == Publication.ENCRYPTION_TYPE_NONE
 
 
    # Finalizes a fully published file.  Decrypts it if necessary, and moves it

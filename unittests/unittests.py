@@ -30,12 +30,15 @@ def exit_handler():
 # file with 'num_outputs' outputs and 'num_transactions' parallel transactions.
 # 'gen_wait' is the number of seconds to wait in between blocks.
 def rand_file_test(size, num_outputs = 5, num_transactions = 1, gen_wait = 1.2):
-  output_file, address_path = begin_test()
-
   rand_filename = 'rand_%d_%dOut_%dTX.bin' % (size, num_outputs, num_transactions)
   rand_bin, rand_bin_hash = make_rand_file(rand_filename, size)
 
   filepath_complete = get_published_file_path(rand_filename)
+  return general_file_test(rand_bin, rand_bin_hash, filepath_complete, size, num_outputs, num_transactions, gen_wait)
+
+
+def general_file_test(filepath_source, filepath_source_hash, filepath_complete, size, num_outputs = 5, num_transactions = 1, gen_wait = 1.2, additional_args = ''):
+  output_file, address_path = begin_test()
 
   # If the defaults are used, don't include --noutputs and -ntransactions.
   # This mimics how the user invokes the program, which can better test for
@@ -44,19 +47,18 @@ def rand_file_test(size, num_outputs = 5, num_transactions = 1, gen_wait = 1.2):
   if (num_outputs != 5) or (num_transactions != 1):
     pub_ctrl = '--noutputs=%d --ntransactions=%d' % (num_outputs, num_transactions)
 
-  ret, proc, bitclamp_stdout_file = run_bitclamp('--file=%s --content-type=undefined %s --unittest-publication-address=%s' % (rand_bin, pub_ctrl, address_path), expected_output_file=filepath_complete, expected_output_file_size=size)
-
+  ret, proc, bitclamp_stdout_file = run_bitclamp('--file=%s --content-type=undefined %s --unittest-publication-address=%s %s' % (filepath_source, pub_ctrl, address_path, additional_args), expected_output_file=filepath_complete, expected_output_file_size=size)
   if ret is False:
     print_output_file(bitclamp_stdout_file)
 
   # Ensure that the output file's hash matches the original file's.
-  elif does_output_file_match(filepath_complete, rand_bin_hash) is False:
+  elif does_output_file_match(filepath_complete, filepath_source_hash) is False:
     print('ERROR: original file hash does not match published file hash!')
     ret = False
 
   # Delete the random file and ensure bitclamp is stopped.
-  if os.path.isfile(rand_bin):
-    os.remove(rand_bin)
+  if os.path.isfile(filepath_source):
+    os.remove(filepath_source)
 
   if os.path.isfile(filepath_complete):
     os.remove(filepath_complete)
@@ -222,6 +224,18 @@ def Core_Rand_Variable():
   return ret
 
 
+# Publishes a plaintext, repeating file between 2KB and 6KB.
+def Core_Plaintext_Repeating_NoCompression_Variable():
+  from os import urandom
+  random_len = (int.from_bytes(urandom(2), byteorder='little') % 4096) + 2048
+
+  filename = 'plaintext_%d.txt' % random_len
+  filepath_source, filepath_source_hash = make_file(filename, b'\x65' * random_len)
+  filepath_complete = get_published_file_path(filename)
+
+  return general_file_test(filepath_source, filepath_source_hash, filepath_complete, random_len, additional_args='--no-crypto --compression=none')
+
+
 # Publishes a random 64KB file with 10 outputs and 3 transactions per block.
 def Core_Rand_64KB_10Out_3TX():
   return rand_file_test(64*1024, 10, 3)
@@ -268,6 +282,7 @@ if __name__ == "__main__":
   tests.append(Core_Rand_64KB_10Out_3TX)
   tests.append(Core_Restore_Test)
   tests.append(Core_Deadman_Switch_Test)
+  tests.append(Core_Plaintext_Repeating_NoCompression_Variable)
 
   if run_all_tests:
     tests.append(Aux_Rand_1MB_20Out_10TX)

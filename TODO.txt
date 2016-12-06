@@ -8,8 +8,6 @@
 
 * Migrate from polling RPC server during publication to a callback architecture.
 
-* Add functionality to search for content through specific ranges of the blockchain.
-
 * Create ECDSA keys directly so that the wallet does not get polluted (note that wallet key deletion is not supported by Bitcoin).
 
 * Add a process to closely monitor unconfirmed transactions in mempool for deadman switch keys.
@@ -17,8 +15,6 @@
 * Add a timeout for PartialFiles.  After, say, X months of no activity and/or Y months since initializing, the publication should be considered failed and no longer tracked.
 
 * Clear interesting TXIDs from PartialFiles when deadman switch files are published.
-
-* Continuation messages should have nonce for unencrypted publications.
 
 * Try to delete interesting TXIDs in blockchain_watcher.py after they are used, if possible.
 
@@ -29,7 +25,6 @@
    * Descriptions can be set.
    * Filenames with malicious paths don't break stuff.
    * Encryption happens by default.
-   * Plaintext publishing works.
    * Automatic compression type detection works.
    * Specific compression type can be selected.
    * Compression can be disabled.
