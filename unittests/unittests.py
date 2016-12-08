@@ -29,12 +29,12 @@ def exit_handler():
 # Creates a file filled with random bytes of a specified size.  Publishes that
 # file with 'num_outputs' outputs and 'num_transactions' parallel transactions.
 # 'gen_wait' is the number of seconds to wait in between blocks.
-def rand_file_test(size, num_outputs = 5, num_transactions = 1, gen_wait = 1.2):
+def rand_file_test(size, num_outputs = 5, num_transactions = 1, gen_wait = 1.2, additional_args = ''):
   rand_filename = 'rand_%d_%dOut_%dTX.bin' % (size, num_outputs, num_transactions)
   rand_bin, rand_bin_hash = make_rand_file(rand_filename, size)
 
   filepath_complete = get_published_file_path(rand_filename)
-  return general_file_test(rand_bin, rand_bin_hash, filepath_complete, size, num_outputs, num_transactions, gen_wait)
+  return general_file_test(rand_bin, rand_bin_hash, filepath_complete, size, num_outputs, num_transactions, gen_wait, additional_args)
 
 
 def general_file_test(filepath_source, filepath_source_hash, filepath_complete, size, num_outputs = 5, num_transactions = 1, gen_wait = 1.2, additional_args = ''):
@@ -47,7 +47,7 @@ def general_file_test(filepath_source, filepath_source_hash, filepath_complete, 
   if (num_outputs != 5) or (num_transactions != 1):
     pub_ctrl = '--noutputs=%d --ntransactions=%d' % (num_outputs, num_transactions)
 
-  ret, proc, bitclamp_stdout_file = run_bitclamp('--file=%s --content-type=undefined %s --unittest-publication-address=%s %s' % (filepath_source, pub_ctrl, address_path, additional_args), expected_output_file=filepath_complete, expected_output_file_size=size)
+  ret, proc, bitclamp_stdout_file, filepath_complete = run_bitclamp('--file=%s --content-type=undefined %s --unittest-publication-address=%s %s' % (filepath_source, pub_ctrl, address_path, additional_args), expected_output_file=filepath_complete, expected_output_file_size=size)
   if ret is False:
     print_output_file(bitclamp_stdout_file)
 
@@ -89,7 +89,7 @@ def deadman_switch_test(data, num_outputs = 5, num_transactions = 1, gen_wait = 
   secrets_txt, secrets_txt_hash = make_file(filename, data)
 
   # Publish the file without the key.
-  ret, proc, bitclamp_stdout_file = run_bitclamp('--file=%s --deadman-switch-save=%s --compression=none' % (secrets_txt, deadman_switch_key), expected_output_file=filepath_partial, expected_output_file_size=len(data))
+  ret, proc, bitclamp_stdout_file, unused = run_bitclamp('--file=%s --deadman-switch-save=%s --compression=none' % (secrets_txt, deadman_switch_key), expected_output_file=filepath_partial, expected_output_file_size=len(data))
 
   # Check if the partial file is GPG-encrypted.
   if ret is False:
@@ -107,7 +107,7 @@ def deadman_switch_test(data, num_outputs = 5, num_transactions = 1, gen_wait = 
     stop_bitclamp(proc, bitclamp_stdout_file)
 
     # Now publish the key.
-    ret, proc, bitclamp_stdout_file = run_bitclamp('--deadman-switch-publish=%s' % deadman_switch_key, expected_output_file=filepath_complete, expected_output_file_size=len(data))
+    ret, proc, bitclamp_stdout_file, unused = run_bitclamp('--deadman-switch-publish=%s' % deadman_switch_key, expected_output_file=filepath_complete, expected_output_file_size=len(data))
     if ret is False:
       print_output_file(bitclamp_stdout_file)
 
@@ -160,7 +160,7 @@ def restore_test(size = -1, num_outputs = 5, num_transactions = 1, gen_wait = 1.
     pub_ctrl = '--noutputs=%d --ntransactions=%d' % (num_outputs, num_transactions)
 
   # Begin publication, but stop before fully finishing.
-  ret, proc, bitclamp_stdout_file = run_bitclamp('--debug --file=%s --content-type=undefined %s --unittest-publication-address=%s' % (rand_bin, pub_ctrl, address_path), expected_output_file=filepath_partial, expected_output_file_size=interrupt_size)
+  ret, proc, bitclamp_stdout_file, unused = run_bitclamp('--debug --file=%s --content-type=undefined %s --unittest-publication-address=%s' % (rand_bin, pub_ctrl, address_path), expected_output_file=filepath_partial, expected_output_file_size=interrupt_size)
 
 
   if ret is False:
@@ -177,7 +177,7 @@ def restore_test(size = -1, num_outputs = 5, num_transactions = 1, gen_wait = 1.
   generate_blocks(100, 0)
 
   # Restore publication using the state file.
-  ret, proc, bitclamp_stdout_file = run_bitclamp('--debug --restore=%s' % (get_state_file()), expected_output_file=filepath_complete, expected_output_file_size=size)
+  ret, proc, bitclamp_stdout_file, unused = run_bitclamp('--debug --restore=%s' % (get_state_file()), expected_output_file=filepath_complete, expected_output_file_size=size)
 
   if ret is False:
     print_output_file(bitclamp_stdout_file)
@@ -252,6 +252,48 @@ def Core_Restore_Test():
   return restore_test()
 
 
+# Checks that a custom filename can be set.
+def Aux_Custom_Filename():
+  filepath_source, filepath_source_hash = make_rand_file('custom_filename1.txt', 999)
+  filepath_complete = get_published_file_path('supercool.exe')
+
+  return general_file_test(filepath_source, filepath_source_hash, filepath_complete, 999, additional_args='--name="supercool.exe"')
+
+
+# Ensures that a filename with a relative path will not result in writing
+# outside the output directory.
+def Aux_Malicious_Filename():
+  filepath_source, filepath_source_hash = make_rand_file('custom_filename2.txt', 999)
+  filepath_complete = get_published_file_path('malicious_filename.exe')
+
+  return general_file_test(filepath_source, filepath_source_hash, filepath_complete, 999, additional_args='--name="../malicious_filename.exe"')
+
+
+# Check that blank filenames are properly published.
+def Aux_No_Filename():
+  filepath_source, filepath_source_hash = make_rand_file('custom_filename3.txt', 999)
+
+  return general_file_test(filepath_source, filepath_source_hash, None, 999, additional_args='--name=""')
+
+
+# Checks that a custom description can be set.
+def Aux_Custom_Description():
+  filename = 'custom_description.txt'
+  description = "SUPERCALIFRAGILISTICEXPIALIDOCIOUS"
+  filepath_source, filepath_source_hash = make_rand_file(filename, 999)
+  filepath_complete = get_published_file_path(filename)
+
+  ret = general_file_test(filepath_source, filepath_source_hash, filepath_complete, 999, additional_args='--description="%s"' % description)
+  if not ret:
+    return False
+
+  extracted_description = get_file_description(filename)
+  if extracted_description != description:
+    return False
+  else:
+    return True
+
+
 # 1MB random file with 20 outputs and 10 transactions.
 def Aux_Rand_1MB_20Out_10TX():
   return rand_file_test(1024*1024, num_outputs=20, num_transactions=10, gen_wait=2.1)
@@ -285,6 +327,10 @@ if __name__ == "__main__":
   tests.append(Core_Plaintext_Repeating_NoCompression_Variable)
 
   if run_all_tests:
+    tests.append(Aux_Custom_Filename)
+    tests.append(Aux_Malicious_Filename)
+    tests.append(Aux_No_Filename)
+    tests.append(Aux_Custom_Description)
     tests.append(Aux_Rand_1MB_20Out_10TX)
     tests.append(Aux_Rand_100KB)
     tests.append(Aux_Rand_512KB)
