@@ -17,7 +17,7 @@
 # This program is called by bitcoind/dogecoind every time it finds a new block.
 # It extracts data and re-assembles files found in the blockchain.
 
-import atexit, binascii, fcntl, json, os, pickle, struct, sys
+import atexit, binascii, fcntl, json, os, pickle, sqlite3, struct, sys
 from BlockParser import *
 from RPCClient import *
 from Utils import *
@@ -25,6 +25,7 @@ from Utils import *
 debug = False
 fd = None
 lock_fd = None
+sqlite_db = None
 
 # Called when the program terminates.  It closes the log file handle and
 # releases the output directory lock.
@@ -33,6 +34,8 @@ def exit_func():
         fd.close()
     if lock_fd is not None:
         lock_fd.close()
+    if sqlite_db is not None:
+        sqlite_db.close()
 
 
 # Writes a message to the log file.
@@ -47,6 +50,44 @@ def d(s):
         log(s)
 
 
+# Returns a connection to a SQLite3 database.  It is created if it does not
+# exist.
+def get_sqlite_connection(sqlite_path):
+    if os.path.isfile(sqlite_path):
+        return sqlite3.connect(sqlite_path, isolation_level=None)
+    else:
+        d('Sqlite3 database file does not exist (%s).  Creating...' % sqlite_path)
+        db = sqlite3.connect(sqlite_path, isolation_level=None)
+        db.execute('PRAGMA encoding = "UTF-8"')
+
+        # If chain = 0, the publication happened on the BTC network, otherwise
+        # it happened on the DOGE network.
+        #
+        # Note that the initial_txid and file_hash fields are in binary, not
+        # ascii hex.
+        db.execute('''CREATE TABLE publications (
+                        id INTEGER PRIMARY KEY,
+                        chain INTEGER1 NOT NULL,
+                        initial_txid BLOB NOT NULL,
+                        filename TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        file_size INTEGER4 NOT NULL,
+                        general_flags INTEGER1 NOT NULL,
+                        encryption_type INTEGER1 NOT NULL,
+                        content_type INTEGER1 NOT NULL,
+                        compression_type INTEGER1 NOT NULL,
+                        file_hash BLOB NOT NULL,
+                        initial_block_num INTEGER4 NOT NULL,
+                        final_block_num INTEGER4 DEFAULT '-1',
+                        file_path TEXT NOT NULL,
+                        is_deadman_switch_file NOT NULL,
+                        is_deadman_switch_key NOT NULL,
+                        is_complete_deadman_switch_file INTEGER1 DEFAULT '0',
+                        is_complete INTEGER1 DEFAULT '0'
+                      )''')
+        return db
+
+
 # Save the block info into the lock file.
 def save_block_info(lock_fd, block_info):
     lock_fd.seek(0)
@@ -56,20 +97,21 @@ def save_block_info(lock_fd, block_info):
 
 
 # This script must be called as:
-#    python3 blockchain_watcher.py [btc | doge] /path/to/output_dir
-#       /path/to/log_file.txt block_hash_goes_here [-d]
+#    python3 blockchain_watcher.py [btc | doge] /path/to/sqlite3_db
+#       /path/to/output_dir /path/to/log_file.txt block_hash_goes_here [-d]
 if __name__ == '__main__':
 
     chain = sys.argv[1]
-    output_dir = sys.argv[2]
-    log_file = sys.argv[3]
-    current_block_hash = sys.argv[4]
+    sqlite_path = sys.argv[2]
+    output_dir = sys.argv[3]
+    log_file = sys.argv[4]
+    current_block_hash = sys.argv[5]
 
     if not ((chain == 'btc') or (chain == 'doge')):
         print("ERROR: first argument must be 'btc' or 'doge': %s" % chain)
         exit(-1)
 
-    if len(sys.argv) == 6 and sys.argv[5] == '-d':
+    if len(sys.argv) == 7 and sys.argv[6] == '-d':
         debug = True
 
     # Acquire a lock on the output directory.  This prevents blocks from being
@@ -105,13 +147,20 @@ if __name__ == '__main__':
         d('Partial directory does not exist (%s).  Creating...' % partial_dir)
         os.mkdir(partial_dir)
 
+    # Get a connection to the SQLite database.
+    sqlite_db = get_sqlite_connection(sqlite_path)
+
     d("Block hash: %s" % current_block_hash)
     current_block = rpc_client.getblock(current_block_hash)
     current_block_num = int(current_block['height'])
 
     # Initialize the BlockParser with the debugging & logging functions,
     # RPCClient, output directory, and partial directory.
-    BlockParser.init(d, log, rpc_client, output_dir, partial_dir)
+    BlockParser.init(d, log, rpc_client, output_dir, partial_dir, chain, sqlite_db=sqlite_db)
+
+    # Vacuum the database every 1,000 blocks.
+    if (current_block_num % 1000) == 0:
+        sqlite_db.execute('VACUUM')
 
     # Well, it turns out that bitcoind/dogecoind does not always call this
     # script with block numbers in their proper order.  The data writing logic

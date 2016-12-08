@@ -23,13 +23,46 @@ from Publication import *
 class BlockParser:
 
     @staticmethod
-    def init(d, log, rpc_client, output_dir, partial_dir, content_filter = None):
+    def init(d, log, rpc_client, output_dir, partial_dir, chain, content_filter = None, sqlite_db = None):
         BlockParser.d = d
         BlockParser.log = log
         BlockParser.rpc_client = rpc_client
         BlockParser.output_dir = output_dir
         BlockParser.partial_dir = partial_dir
+        BlockParser.chain_int = 0 if chain == 'btc' else 1
         BlockParser.content_filter = content_filter
+        BlockParser.sqlite_db = sqlite_db
+
+
+    # Add a new entry in the SQLite3 database (if it was provided).
+    @staticmethod
+    def database_add_file(partial_file):
+        if BlockParser.sqlite_db is not None:
+            is_deadman_switch_file = 1 if partial_file.is_deadman_switch_file() else 0
+            is_deadman_switch_key = 1 if partial_file.is_deadman_switch_key() else 0
+            cursor = BlockParser.sqlite_db.execute("INSERT INTO publications(chain, initial_txid, filename, description, file_size, general_flags, encryption_type, content_type, compression_type, file_hash, initial_block_num, file_path, is_deadman_switch_file, is_deadman_switch_key) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (BlockParser.chain_int, binascii.unhexlify(partial_file.initial_txid), partial_file.sanitized_filename, partial_file.description, partial_file.file_size, partial_file.general_flags, partial_file.encryption_type, partial_file.content_type, partial_file.compression_type, partial_file.file_hash, partial_file.initial_block_num, partial_file.file_path, is_deadman_switch_file, is_deadman_switch_key))
+
+            # Set the ID of this SQL row.
+            partial_file.sql_id = cursor.lastrowid
+
+
+    # Updates a database entry for a PartialFile if its status changes (i.e.:
+    # becomes finalized).
+    @staticmethod
+    def database_update_file(partial_file):
+        if BlockParser.sqlite_db is not None:
+
+            if partial_file.final_block_num != -1:
+                BlockParser.sqlite_db.execute('UPDATE publications SET final_block_num=? WHERE id=?', (partial_file.final_block_num, partial_file.sql_id,))
+
+            if partial_file.is_complete_deadman_switch_file():
+                BlockParser.sqlite_db.execute('UPDATE publications SET is_complete_deadman_switch_file=1 WHERE id=?', (partial_file.sql_id,))
+
+            if partial_file.is_complete():
+                BlockParser.sqlite_db.execute('UPDATE publications SET is_complete=1 WHERE id=?', (partial_file.sql_id,))
+
+            if partial_file.finalized:
+                BlockParser.sqlite_db.execute('UPDATE publications SET file_path=? WHERE id=?', (partial_file.file_path, partial_file.sql_id,))
 
 
     # Decrypts a deadman switch file, given a key.  Stores the decrypted file
@@ -177,7 +210,12 @@ class BlockParser:
                         # sure.
                         sanitized_filename = os.path.basename(filename).replace('\\', '').replace('/', '')
 
+                        # If this appears to be a malicious filename, log it.
+                        if filename != sanitized_filename:
+                            BlockParser.d('Malicious filename detected: [%s]; sanitized into: [%s]' % (filename, sanitized_filename))
+
                         partial_file = PartialFile(BlockParser.d, txid, BlockParser.output_dir, BlockParser.partial_dir, sanitized_filename, description, file_size, general_flags, encryption_type, content_type, compression_type, file_hash, current_block_num)
+                        BlockParser.database_add_file(partial_file)
 
                         # If there is a content filter in place, check to see
                         # if this PartialFile matches.  If not, skip it.
@@ -267,6 +305,9 @@ class BlockParser:
                                 if partial_file.is_deadman_switch_file():
                                     BlockParser.log("Deadman switch file retrieved.")
 
+                                # Update the file entry in the database now that
+                                # the file's been finalized.
+                                BlockParser.database_update_file(partial_file)
 
                                 partial_file = None
 

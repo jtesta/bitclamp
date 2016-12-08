@@ -162,7 +162,7 @@ if __name__ == '__main__':
 
     # Initialize the BlockParser with the debugging & logging functions,
     # RPCClient, output & partial directories, and content filter.
-    BlockParser.init(d, log, rpc_client, output_dir, partial_dir, content_filter)
+    BlockParser.init(d, log, rpc_client, output_dir, partial_dir, chain, content_filter)
 
     current_block_num = start_block
     while current_block_num <= end_block:

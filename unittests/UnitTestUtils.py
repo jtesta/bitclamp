@@ -46,6 +46,9 @@ cli = None
 user_writer = None
 user_reader = None
 
+# The full path to the SQLite3 database.
+sqlite3_file = None
+
 
 # Removes any leftover files from a previous publication in the output
 # directory, and returns two new temporary files.
@@ -53,7 +56,7 @@ def begin_test():
   # Delete all files in the output directory that isn't the log file.
   for f in os.listdir(reader_outputdir):
     full_path = os.path.join(reader_outputdir, f)
-    if os.path.isfile(full_path) and f != 'log.txt' and f != 'lockfile':
+    if os.path.isfile(full_path) and f != 'log.txt' and f != 'lockfile' and f != 'bitclamp_sqlite.db':
       os.remove(full_path)
 
   # Delete all files in the partial/ sub-directory.
@@ -140,6 +143,19 @@ def generate_blocks(num_blocks, gen_wait):
   exec_wait(user_writer, '/bin/bash -c "%s generate %d \$PUBKEY; sleep %.1f"' % (cli, num_blocks, gen_wait))
 
 
+# Given the filename of a publication, extract its description from the
+# database.
+def get_file_description(filename):
+  import sqlite3
+
+  db = sqlite3.connect(sqlite3_file)
+  cursor = db.execute('SELECT description FROM publications WHERE filename=?', (filename,))
+  ret = cursor.fetchone()[0]
+  db.close()
+
+  return ret
+
+
 # Given a filename, returns its full path in the reader's partial output
 # directory.
 def get_partial_file_path(filename):
@@ -207,7 +223,7 @@ def get_state_file():
 # Initializes the Utils subsystem.
 def init_utils(code_dir, chain):
 
-  global chain_btc, cli, writer_tempdir, bitclamp_py, user_writer, user_reader, change_address, reader_outputdir, btc_classic
+  global chain_btc, cli, writer_tempdir, bitclamp_py, user_writer, user_reader, change_address, reader_outputdir, btc_classic, sqlite3_file
 
   chain_btc = True
   cli = 'bitcoin-cli'
@@ -234,6 +250,11 @@ def init_utils(code_dir, chain):
   lock_file = os.path.join(reader_outputdir, 'lockfile')
   if os.path.isfile(lock_file):
     os.remove(lock_file)
+
+  # Delete the SQLite3 database, if it exists.
+  sqlite3_file = os.path.join(reader_outputdir, 'bitclamp_sqlite.db')
+  if os.path.isfile(sqlite3_file):
+    os.remove(sqlite3_file)
 
   # Get the path to bitclamp.py.
   bitclamp_py = os.path.join(code_dir, 'bitclamp.py')
@@ -313,7 +334,8 @@ def print_output_file(bitclamp_stdout_file):
 #                         block.
 #
 # Returns a tuple containing a boolean denoting success or failure, the process
-# handle, and a file handle to bitclamp's stdout & stderr stream.
+# handle, a file handle to bitclamp's stdout & stderr stream, and the output
+# file created (useful for when publications with no filename are made).
 def run_bitclamp(args, expected_output_file, expected_output_file_size = 0, gen_wait = 1.2, num_outputs = 5, num_transactions = 1):
   ret = True
 
@@ -347,7 +369,7 @@ def run_bitclamp(args, expected_output_file, expected_output_file_size = 0, gen_
     publish_address, amount = get_publication_address(address_path, bitclamp_stdout_file)
     if publish_address is None:
       print("FAILED TO GET PUBLICATION ADDRESS & AMOUNT!")
-      return False, proc, bitclamp_stdout_file
+      return False, proc, bitclamp_stdout_file, None
 
     # Round up the amount if we're using dogecoin.
     if not chain_btc:
@@ -358,6 +380,24 @@ def run_bitclamp(args, expected_output_file, expected_output_file_size = 0, gen_
     # Send the funds to the publication address to start the process.
     send_funds(publish_address, amount)
 
+  # If the expected_output_file is None (i.e.: when we are testing publications
+  # with no filenames), look in the partial directory for a file that begins
+  # with 'unnamed_file_'.  That is the prefix for files that were published
+  # with a blank filename.
+  if expected_output_file is None:
+    partial_dir = os.path.join(reader_outputdir, 'partial/')
+
+    # The partial directory may be empty at this point, so generate blocks
+    # until its not.
+    while os.listdir(partial_dir) == []:
+      generate_blocks(1, gen_wait)
+
+    # Look through the partial directory and find one named "unnamed_file_*".
+    for f in os.listdir(partial_dir):
+      if f.startswith('unnamed_file_') and not f.endswith('.state'):
+        expected_output_file = os.path.join(reader_outputdir, f)
+        break
+
   # While bitclamp is still running, and while the output file doesn't exist
   # (or isn't large enough), keep generating blocks.
   while (proc.poll() is None) and ((os.path.isfile(expected_output_file) is False) or (os.path.getsize(expected_output_file) < expected_output_file_size)):
@@ -367,7 +407,7 @@ def run_bitclamp(args, expected_output_file, expected_output_file_size = 0, gen_
   # expected size.
   ret = os.path.isfile(expected_output_file) and (os.path.getsize(expected_output_file) >= expected_output_file_size)
 
-  return ret, proc, bitclamp_stdout_file
+  return ret, proc, bitclamp_stdout_file, expected_output_file
   
 
 # As the writer user, sends the specified amount to the specified address.

@@ -47,6 +47,7 @@ class PartialFile:
       self.temporal_key = None
       self.num_parallel_txs = -1
       self.finalized = False
+      self.sql_id = -1
 
 
    # Logs a debugging message.
@@ -226,6 +227,9 @@ class PartialFile:
          # Move file out of partial directory into output directory.
          os.rename(self.file_path, new_file_path)
 
+      # Update the file_path with its final destination.
+      self.file_path = new_file_path
+
       # Delete the state file.
       os.unlink(self.state_file)
 
@@ -254,7 +258,7 @@ class PartialFile:
       if self.temporal_key is not None:
          s = "Temporal Key: %s\n" % binascii.hexlify(self.temporal_key).decode('ascii')
 
-      return "PartialFile:\n\tInitial TXID: %s\n\tSanitized filename: %s\n\tDescription: %s\n\tFile size: %d\n\tEncryption type: %s\n\tContent type: %s\n\tCompression type: %s\n\t%s\n\tFile hash: %s\n\tFile pointer: %d\n\tACK Window: %s\n\t%s\n\tInitial block number: %d\n\tFinal block number: %d\n\tIs deadman switch file: %s\n\tIs deadman switch key: %s\n\tIs complete deadman switch file: %r\n\tIs complete: %r\n" % (self.initial_txid, self.sanitized_filename, self.description, self.file_size, Publication.get_encryption_str(self.encryption_type), Publication.get_content_type_str(self.content_type), Publication.get_compression_type_str(self.compression_type), general_flags_str, binascii.hexlify(self.file_hash).decode('ascii'), self.file_ptr, self.block_acks, s, self.initial_block_num, self.final_block_num, self.is_deadman_switch_file(), self.is_deadman_switch_key(), self.is_complete_deadman_switch_file(), self.is_complete())
+      return "PartialFile:\n\tInitial TXID: %s\n\tSanitized filename: %s\n\tDescription: %s\n\tFile size: %d\n\tEncryption type: %s\n\tContent type: %s\n\tCompression type: %s\n\t%s\n\tFile hash: %s\n\tFile pointer: %d\n\tACK Window: %s\n\t%s\n\tInitial block number: %d\n\tFinal block number: %d\n\tSQL ID: %d\n\tIs deadman switch file: %s\n\tIs deadman switch key: %s\n\tIs complete deadman switch file: %r\n\tIs complete: %r\n" % (self.initial_txid, self.sanitized_filename, self.description, self.file_size, Publication.get_encryption_str(self.encryption_type), Publication.get_content_type_str(self.content_type), Publication.get_compression_type_str(self.compression_type), general_flags_str, binascii.hexlify(self.file_hash).decode('ascii'), self.file_ptr, self.block_acks, s, self.initial_block_num, self.final_block_num, self.sql_id, self.is_deadman_switch_file(), self.is_deadman_switch_key(), self.is_complete_deadman_switch_file(), self.is_complete())
 
 
    # Return a unique filepath to use for a new file, based on the TXID and

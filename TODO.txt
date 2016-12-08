@@ -21,9 +21,6 @@
 * Add unit tests:
    * Ensure blockchain forks & rollbacks handled correctly.
    * Support the case where initial funds are sent via multiple transactions.
-   * Filenames can be changed.
-   * Descriptions can be set.
-   * Filenames with malicious paths don't break stuff.
    * Encryption happens by default.
    * Automatic compression type detection works.
    * Specific compression type can be selected.
@@ -31,3 +28,4 @@
    * Automatic content type detection works.
    * Specific content type can be selected.
    * Restore a deadman switch publication.
+   * Ensure bitclamp_extracterizer.py works.

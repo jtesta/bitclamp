@@ -73,11 +73,15 @@ cp btc_reset_reader.sh btc_run_bitcoind_reader.sh ~btcreader; chown -R btcreader
 cp doge_reset_writer.sh doge_run_dogecoind_writer.sh ~dogewriter; chown -R dogewriter:dogewriter ~dogewriter
 cp doge_reset_reader.sh doge_run_dogecoind_reader.sh ~dogereader; chown -R dogereader:dogereader ~dogereader
 
+wipe_output="alias wipe_output='rm -f \$HOME/output/log.txt \$HOME/output/lockfile \$HOME/output/bitclamp_sqlite.db \$HOME/output/partial/*'"
+echo $wipe_output >> ~btcreader/.bashrc
+echo $wipe_output >> ~dogereader/.bashrc
+
 chmod 0700 ~btcwriter/*.sh ~btcreader/*.sh ~dogewriter/*.sh ~dogereader/*.sh 
 
 # Initialize the BTC blockchain and start up the daemons.
 su - btcwriter -c "~/btc_reset_writer.sh && ~/btc_run_bitcoind_writer.sh"
-su - btcreader -c "mkdir -m 0700 \$HOME/output && ~/btc_reset_reader.sh $PROJECT_BASE_DIR/blockchain_watcher.py \$HOME/output && ~/btc_run_bitcoind_reader.sh"
+su - btcreader -c "mkdir -m 0700 \$HOME/output && ~/btc_reset_reader.sh $PROJECT_BASE_DIR/blockchain_watcher.py \$HOME/output \$HOME/output/bitclamp_sqlite.db && ~/btc_run_bitcoind_reader.sh"
 
 # Wait for the service to start
 num_blocks=`su - btcreader -c "bitcoin-cli getblockcount 2>&1"`
@@ -152,7 +156,7 @@ echo
 
 # Initialize the DOGE blockchain and start up the daemons.
 su - dogewriter -c "~/doge_reset_writer.sh && ~/doge_run_dogecoind_writer.sh"
-su - dogereader -c "mkdir -m 0700 \$HOME/output && ~/doge_reset_reader.sh $PROJECT_BASE_DIR/blockchain_watcher.py \$HOME/output && ~/doge_run_dogecoind_reader.sh"
+su - dogereader -c "mkdir -m 0700 \$HOME/output && ~/doge_reset_reader.sh $PROJECT_BASE_DIR/blockchain_watcher.py \$HOME/output \$HOME/output/bitclamp_sqlite.db && ~/doge_run_dogecoind_reader.sh"
 
 
 # Wait for the service to start
