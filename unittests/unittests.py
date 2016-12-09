@@ -17,7 +17,7 @@
 # This program runs unit tests.  Invoked from the top-level Makefile via
 # "make alltests" or "make coretests".
 
-import atexit, os, sys, time
+import atexit, os, shutil, sys, time
 from UnitTestUtils import *
 
 
@@ -287,7 +287,7 @@ def Aux_Custom_Description():
   if not ret:
     return False
 
-  extracted_description = get_file_description(filename)
+  extracted_description = database_get_file_description(filename)
   if extracted_description != description:
     return False
   else:
@@ -308,6 +308,47 @@ def Aux_Rand_100KB():
 def Aux_Rand_512KB():
   return rand_file_test(512*1024, gen_wait=1.7)
 
+
+# Use bitclamp_extracterizer.py to extract content.
+def Aux_Extract_All_Content():
+  ret = False
+  so, se = exec_wait_reader('mktemp -d')
+  temp_dir = so.decode('ascii').strip()
+
+  # Extract all files into a temporary directory.  Only files published since
+  # the last invokation of unit tests will be extracted.
+  run_bitclamp_extracterizer(temp_dir, '--start-block=%d' % database_get_first_block_num())
+
+  # Get a list of all published filenames.
+  filenames = database_get_file_list()
+
+  # Traverse the output directory.  Remove each file found from the list of
+  # published filenames.  What's left should be an empty list, otherwise any
+  # filenames remaining were those that were not successfully extracted.
+  for f in os.listdir(temp_dir):
+    if f in filenames:
+      filenames.remove(f)
+
+    # Files that begin with 'unnamed_file_' were published with no filename,
+    # so remove '' from the list.
+    elif f.startswith('unnamed_file_'):
+      filenames.remove('')
+
+  # If all filenames were removed from the list.
+  if len(filenames) == 0:
+    ret = True
+
+    # Remove the temporary directory.
+    shutil.rmtree(temp_dir)
+  else:
+    # Print error messages.  Don't delete the temporary directory so that the
+    # user can manually inspect it.
+    print()
+    print('FAILED TO EXTRACT (%d): [%s]' % (len(filenames), ','.join(filenames)))
+    print('Temporary directory: %s' % temp_dir)
+    print()
+
+  return ret
 
 
 if __name__ == "__main__":
@@ -334,6 +375,7 @@ if __name__ == "__main__":
     tests.append(Aux_Rand_1MB_20Out_10TX)
     tests.append(Aux_Rand_100KB)
     tests.append(Aux_Rand_512KB)
+    tests.append(Aux_Extract_All_Content)
 
   print()
   if run_all_tests:

@@ -21,8 +21,11 @@ import hashlib, math, os, subprocess, time
 # A list of temporary files created by make_temp_file().
 temp_files = []
 
-# The full patch to the bitclamp.py script.
+# The full path to the bitclamp.py script.
 bitclamp_py = None
+
+# The full path to the bitclamp_extracterizer.py script.
+bitclamp_extracterizer_py = None
 
 # The temp directory inside the writer's home directory.
 writer_tempdir = None
@@ -32,6 +35,9 @@ reader_outputdir = None
 
 # The address to send all change to.
 change_address = None
+
+# The current chain, in string form.  This is either 'btc' or 'doge'.
+chain_str = None
 
 # True if we are using the BTC chain, otherwise we are using DOGE.
 chain_btc = None
@@ -88,6 +94,46 @@ def clean_temp_files():
       os.remove(temp_file)
 
 
+# Get a list of all filenames in the database.  This is with respect to the
+# last time the unit tests were run.
+def database_get_file_list():
+  import sqlite3
+
+  ret = []
+  db = sqlite3.connect(sqlite3_file)
+  for row in db.execute('SELECT filename FROM publications WHERE is_deadman_switch_key=0'):
+    ret.append(row[0])
+
+  db.close()
+  return ret
+
+
+# Given the filename of a publication, extract its description from the
+# database.
+def database_get_file_description(filename):
+  import sqlite3
+
+  db = sqlite3.connect(sqlite3_file)
+  cursor = db.execute('SELECT description FROM publications WHERE filename=?', (filename,))
+  ret = cursor.fetchone()[0]
+  db.close()
+
+  return ret
+
+
+# Retrieves the first block number of content in the database.  This is with
+# respect to the last time the unit tests were run.
+def database_get_first_block_num():
+  import sqlite3
+
+  db = sqlite3.connect(sqlite3_file)
+  cursor = db.execute('SELECT MIN(initial_block_num) FROM publications')
+  ret = cursor.fetchone()[0]
+  db.close()
+
+  return ret
+
+
 # Check if an output file was properly created, and if its SHA-512 hash matches
 # the expected value.  Returns True, otherwise False.
 def does_output_file_match(filename, expected_hash):
@@ -141,19 +187,6 @@ def exec_wait_reader(arg_str, stdin_str = ''):
 # Generates 'num_blocks', and waits 'gen_wait' seconds afterwards.
 def generate_blocks(num_blocks, gen_wait):
   exec_wait(user_writer, '/bin/bash -c "%s generate %d \$PUBKEY; sleep %.1f"' % (cli, num_blocks, gen_wait))
-
-
-# Given the filename of a publication, extract its description from the
-# database.
-def get_file_description(filename):
-  import sqlite3
-
-  db = sqlite3.connect(sqlite3_file)
-  cursor = db.execute('SELECT description FROM publications WHERE filename=?', (filename,))
-  ret = cursor.fetchone()[0]
-  db.close()
-
-  return ret
 
 
 # Given a filename, returns its full path in the reader's partial output
@@ -223,8 +256,9 @@ def get_state_file():
 # Initializes the Utils subsystem.
 def init_utils(code_dir, chain):
 
-  global chain_btc, cli, writer_tempdir, bitclamp_py, user_writer, user_reader, change_address, reader_outputdir, btc_classic, sqlite3_file
+  global chain_str, chain_btc, cli, writer_tempdir, bitclamp_py, bitclamp_extracterizer_py, user_writer, user_reader, change_address, reader_outputdir, btc_classic, sqlite3_file
 
+  chain_str = chain.lower()
   chain_btc = True
   cli = 'bitcoin-cli'
   user_writer = 'btcwriter'
@@ -260,6 +294,12 @@ def init_utils(code_dir, chain):
   bitclamp_py = os.path.join(code_dir, 'bitclamp.py')
   if not os.path.isfile(bitclamp_py):
     print("%s does not exist!  Terminating." % bitclamp_py)
+    exit(-1)
+
+  # Get the path to bitclamp_extracterizer.py.
+  bitclamp_extracterizer_py = os.path.join(code_dir, 'bitclamp_extracterizer.py')
+  if not os.path.isfile(bitclamp_extracterizer_py):
+    print("%s does not exist!  Terminating." % bitclamp_extracterizer_py)
     exit(-1)
 
   # Get the writer's account address to use as the change address.
@@ -408,7 +448,12 @@ def run_bitclamp(args, expected_output_file, expected_output_file_size = 0, gen_
   ret = os.path.isfile(expected_output_file) and (os.path.getsize(expected_output_file) >= expected_output_file_size)
 
   return ret, proc, bitclamp_stdout_file, expected_output_file
-  
+
+
+# Runs bitclamp_extracterizer.py.
+def run_bitclamp_extracterizer(temp_dir, args = ''):
+  exec_wait_reader('python3 %s --regtest --chain=%s --output=%s %s' % (bitclamp_extracterizer_py, chain_str, temp_dir, args))
+
 
 # As the writer user, sends the specified amount to the specified address.
 def send_funds(address, amount):
