@@ -34,10 +34,10 @@ def rand_file_test(size, num_outputs = 5, num_transactions = 1, gen_wait = 1.2, 
   rand_bin, rand_bin_hash = make_rand_file(rand_filename, size)
 
   filepath_complete = get_published_file_path(rand_filename)
-  return general_file_test(rand_bin, rand_bin_hash, filepath_complete, size, num_outputs, num_transactions, gen_wait, additional_args)
+  return general_file_test(rand_bin, rand_bin_hash, filepath_complete, num_outputs, num_transactions, gen_wait, additional_args)
 
 
-def general_file_test(filepath_source, filepath_source_hash, filepath_complete, size, num_outputs = 5, num_transactions = 1, gen_wait = 1.2, additional_args = ''):
+def general_file_test(filepath_source, filepath_source_hash, filepath_complete, num_outputs = 5, num_transactions = 1, gen_wait = 1.2, additional_args = ''):
   output_file, address_path = begin_test()
 
   # If the defaults are used, don't include --noutputs and -ntransactions.
@@ -47,7 +47,7 @@ def general_file_test(filepath_source, filepath_source_hash, filepath_complete, 
   if (num_outputs != 5) or (num_transactions != 1):
     pub_ctrl = '--noutputs=%d --ntransactions=%d' % (num_outputs, num_transactions)
 
-  ret, proc, bitclamp_stdout_file, filepath_complete = run_bitclamp('--file=%s --content-type=undefined %s --unittest-publication-address=%s %s' % (filepath_source, pub_ctrl, address_path, additional_args), expected_output_file=filepath_complete, expected_output_file_size=size)
+  ret, proc, bitclamp_stdout_file, filepath_complete = run_bitclamp('--file=%s --content-type=undefined %s --unittest-publication-address=%s %s' % (filepath_source, pub_ctrl, address_path, additional_args), expected_output_file=filepath_complete)
   if ret is False:
     print_output_file(bitclamp_stdout_file)
 
@@ -233,7 +233,7 @@ def Core_Plaintext_Repeating_NoCompression_Variable():
   filepath_source, filepath_source_hash = make_file(filename, b'\x65' * random_len)
   filepath_complete = get_published_file_path(filename)
 
-  return general_file_test(filepath_source, filepath_source_hash, filepath_complete, random_len, additional_args='--no-crypto --compression=none')
+  return general_file_test(filepath_source, filepath_source_hash, filepath_complete, additional_args='--no-crypto --compression=none')
 
 
 # Publishes a random 64KB file with 10 outputs and 3 transactions per block.
@@ -257,7 +257,7 @@ def Aux_Custom_Filename():
   filepath_source, filepath_source_hash = make_rand_file('custom_filename1.txt', 999)
   filepath_complete = get_published_file_path('supercool.exe')
 
-  return general_file_test(filepath_source, filepath_source_hash, filepath_complete, 999, additional_args='--name="supercool.exe"')
+  return general_file_test(filepath_source, filepath_source_hash, filepath_complete, additional_args='--name="supercool.exe"')
 
 
 # Ensures that a filename with a relative path will not result in writing
@@ -266,14 +266,14 @@ def Aux_Malicious_Filename():
   filepath_source, filepath_source_hash = make_rand_file('custom_filename2.txt', 999)
   filepath_complete = get_published_file_path('malicious_filename.exe')
 
-  return general_file_test(filepath_source, filepath_source_hash, filepath_complete, 999, additional_args='--name="../malicious_filename.exe"')
+  return general_file_test(filepath_source, filepath_source_hash, filepath_complete, additional_args='--name="../malicious_filename.exe"')
 
 
 # Check that blank filenames are properly published.
 def Aux_No_Filename():
   filepath_source, filepath_source_hash = make_rand_file('custom_filename3.txt', 999)
 
-  return general_file_test(filepath_source, filepath_source_hash, None, 999, additional_args='--name=""')
+  return general_file_test(filepath_source, filepath_source_hash, None, additional_args='--name=""')
 
 
 # Checks that a custom description can be set.
@@ -283,7 +283,7 @@ def Aux_Custom_Description():
   filepath_source, filepath_source_hash = make_rand_file(filename, 999)
   filepath_complete = get_published_file_path(filename)
 
-  ret = general_file_test(filepath_source, filepath_source_hash, filepath_complete, 999, additional_args='--description="%s"' % description)
+  ret = general_file_test(filepath_source, filepath_source_hash, filepath_complete, additional_args='--description="%s"' % description)
   if not ret:
     return False
 
