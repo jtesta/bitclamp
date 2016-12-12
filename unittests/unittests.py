@@ -312,15 +312,15 @@ def Aux_Rand_512KB():
 # Use bitclamp_extracterizer.py to extract content.
 def Aux_Extract_All_Content():
   ret = False
-  so, se = exec_wait_reader('mktemp -d')
-  temp_dir = so.decode('ascii').strip()
+  temp_dir = make_reader_temp_dir()
 
   # Extract all files into a temporary directory.  Only files published since
   # the last invokation of unit tests will be extracted.
   run_bitclamp_extracterizer(temp_dir, '--start-block=%d' % database_get_first_block_num())
 
   # Get a list of all published filenames.
-  filenames = database_get_file_list()
+  file_data = database_get_file_list()
+  filenames = [tup[0] for tup in file_data]
 
   # Traverse the output directory.  Remove each file found from the list of
   # published filenames.  What's left should be an empty list, otherwise any
@@ -343,12 +343,65 @@ def Aux_Extract_All_Content():
   else:
     # Print error messages.  Don't delete the temporary directory so that the
     # user can manually inspect it.
-    print()
-    print('FAILED TO EXTRACT (%d): [%s]' % (len(filenames), ','.join(filenames)))
-    print('Temporary directory: %s' % temp_dir)
-    print()
+    print("\nFAILED TO EXTRACT (%d): [%s]" % (len(filenames), ','.join(filenames)))
+    print("Temporary directory: %s\n" % temp_dir)
 
   return ret
+
+
+# Use bitclamp_extracterizer.py to extract each file individually using its
+# start and end block numbers.
+def Aux_Extract_Each_File():
+  ret = False
+  temp_dir = make_reader_temp_dir()
+
+  # Get a list of all published filenames.
+  file_data = database_get_file_list()
+
+  # Loop through all published files.
+  for tup in file_data:
+    filename = tup[0]
+    start_block = tup[1]
+    end_block = tup[2]
+    is_deadman_switch_file = tup[3]
+
+    # Skip deadman switch files.
+    if is_deadman_switch_file == 1:
+      continue
+
+    # Using the file's start and end block numbers, extract it into the temp
+    # directory.
+    run_bitclamp_extracterizer(temp_dir, '--start-block=%d --end-block=%d' % (start_block, end_block))
+
+    # List all the files in the temp directory.
+    extracted_files = os.listdir(temp_dir)
+
+    # If the file we are looking for is in the temp dir, delete it and move on
+    # (this is a success).
+    if filename != '' and filename in extracted_files:
+      os.remove(os.path.join(temp_dir, filename))
+
+    # If the file was published with no name, look for a filename with prefix
+    # 'unnamed_file_'.  If found, delete it and move on (this, too, is a
+    # success).
+    elif filename == '':
+      found_unnamed = False
+      for extracted_file in extracted_files:
+        if extracted_file.startswith('unnamed_file_'):
+          found_unnamed = True
+          os.remove(os.path.join(temp_dir, extracted_file))
+          break
+
+      if found_unnamed is False:
+        print("\nFailed to find unnamed file.\n")
+        return False
+    else:
+      print("\nFile failed to extract: %s\n" % filename)
+      return False
+
+  # Remove the temporary directory.
+  shutil.rmtree(temp_dir)
+  return True
 
 
 if __name__ == "__main__":
@@ -376,6 +429,7 @@ if __name__ == "__main__":
     tests.append(Aux_Rand_100KB)
     tests.append(Aux_Rand_512KB)
     tests.append(Aux_Extract_All_Content)
+    tests.append(Aux_Extract_Each_File)
 
   print()
   if run_all_tests:

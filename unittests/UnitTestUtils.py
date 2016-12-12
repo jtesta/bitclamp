@@ -101,8 +101,8 @@ def database_get_file_list():
 
   ret = []
   db = sqlite3.connect(sqlite3_file)
-  for row in db.execute('SELECT filename FROM publications WHERE is_deadman_switch_key=0'):
-    ret.append(row[0])
+  for row in db.execute('SELECT filename, initial_block_num, final_block_num, is_deadman_switch_file, file_hash FROM publications WHERE is_deadman_switch_key=0'):
+    ret.append((row[0], row[1], row[2], row[3], row[4]))
 
   db.close()
   return ret
@@ -348,6 +348,13 @@ def make_temp_file():
    temp_file = temp_file.decode('ascii').strip()
    temp_files.append(temp_file)
    return temp_file
+
+
+# Creates a temporary directory for the reader.  Note that this will NOT be
+# automatically removed by any process; the caller must remove it manually.
+def make_reader_temp_dir():
+  so, se = exec_wait_reader('mktemp -d')
+  return so.decode('ascii').strip()
 
 
 # Creates a temp file in the writer's directory.

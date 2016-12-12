@@ -18,6 +18,8 @@
 
 * Try to delete interesting TXIDs in blockchain_watcher.py after they are used, if possible.
 
+* Strip out null bytes from filenames.
+
 * Add unit tests:
    * Ensure blockchain forks & rollbacks handled correctly.
    * Support the case where initial funds are sent via multiple transactions.
@@ -28,4 +30,3 @@
    * Automatic content type detection works.
    * Specific content type can be selected.
    * Restore a deadman switch publication.
-   * Ensure bitclamp_extracterizer.py works.
