@@ -2,8 +2,6 @@
 
 * If a publication is interrupted while waiting for initial funds, the funds could be confirmed later, but would be lost (!).  Code is needed to either continue publication or refund the user (refunding is probably easier).
 
-* Detect if Python2 was mistakenly used.
-
 * Check if all compression programs are available at run time.
 
 * Migrate from polling RPC server during publication to a callback architecture.

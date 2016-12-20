@@ -15,6 +15,10 @@
 
 import argparse, pickle, signal, sys
 
+if sys.version_info.major < 3:
+    print('Error: you must invoke this script with python3, not python.')
+    exit(-1)
+
 from Publication import *
 from RPCClient import *
 
