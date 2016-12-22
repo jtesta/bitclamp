@@ -1217,34 +1217,27 @@ class Publication:
                             txrecord.add_vout_num(int(vout['n']))
                             txrecord.add_value(vout['value'])
 
-                # Check if a network fork caused this previously-confirmed
-                # transaction to become unconfirmed.
-                if (previous_confirmations > 0) and (txrecord.get_confirmations() == 0) and (txrecord.get_txid() is not None):
-                    retransmit.append(txrecord.get_txid())
+                # If any TXIDs in our lists have zero confirmations (except for
+                # the ones at the end), then a network fork occurred and
+                # converted them into unconfirmed transactions.  We will
+                # re-transmit them to speed up propagation across the memory
+                # pools.
+                #
+                # This re-transmission may not be strictly necessary (as the
+                # wallet should re-transmit them), but in a test environment,
+                # foreign nodes were not observed to receive the unconfirmed
+                # transactions from the original sender even after a few hours
+                # (though they remained in the sender's mempool).
+                # Re-transmitting them here is theorized to speed up
+                # propagation, in hopes of speeding up resumption of
+                # publication.  Either way, it can't hurt, sooo...
+                if (txrecord.get_confirmations() == 0) and (txrecord.get_txid() is not None) and (self.txrecords[i].index(txrecord) != (len(self.txrecords[i]) - 1)):
+                    self.d('Network fork detected, which caused TXID %s to become unconfirmed%s.  Re-transmitting it now...' % (txrecord.get_txid(), ' (from %d confirmations)' % previous_confirmations if previous_confirmations > 0 else ''))
 
-
-        # Go through the list of TXIDs that became unconfirmed due to a network
-        # fork.  Re-transmit each one to speed up propagation in the memory
-        # pools.
-        #
-        # This re-transmission may not be strictly necessary, but in a test
-        # environment, foreign nodes were not observed to receive the
-        # unconfirmed transactions from the original sender even after a few
-        # hours (though they remained in the sender's mempool).  Re-transmitting
-        # them here is theorized to speed up propagation, in hopes of speeding
-        # up resumption of publication.  Either way, it can't hurt, sooo...
-        if len(retransmit) > 0:
-            self.d('FOUND %d TXIDS THAT HAVE BEEN ROLLED BACK DUE TO A NETWORK FORK.' % len(retransmit))
-
-        for txid in retransmit:
-            self.d('Re-transmitting TXID %s...' % txid)
-            signed_raw_tx_hex = self.rpc_client.getrawtransaction(txid, 0)
-            try:
-                self.rpc_client.sendrawtransaction(signed_raw_tx_hex)
-            except urllib.error.HTTPError as e:
-                self.d('An exception was caught while re-transmitting TXID %s (this can probably be ignored): %d: %s' % (txid, e.code, e.read().decode('ascii')))
-        if len(retransmit) > 0:
-            self.d('DONE RE-TRANSMITTING TXIDS.')
+                    try:
+                        self.rpc_client.sendrawtransaction(self.rpc_client.getrawtransaction(txid, 0))
+                    except urllib.error.HTTPError as e:
+                        self.d('An exception was caught while re-transmitting TXID %s (this can probably be ignored): %d: %s' % (txid, e.code, e.read().decode('ascii')))
 
 
         # Go through the list again now that all confirmation counts are
