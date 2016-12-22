@@ -18,8 +18,11 @@
 
 * Strip out null bytes from filenames.
 
+* See if multi-threaded block parsing speeds up file extraction in bitclamp_extracterizer.py.
+
+* Upon successful publication, bitclamp.py should print the start and end blocks of the file.
+
 * Add unit tests:
-   * Ensure blockchain forks & rollbacks handled correctly.
    * Support the case where initial funds are sent via multiple transactions.
    * Encryption happens by default.
    * Automatic compression type detection works.

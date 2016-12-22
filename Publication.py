@@ -1159,8 +1159,8 @@ class Publication:
             block_txs = self.rpc_client.getblock(best_block_hash)['tx']
             self.d("Parsed getblock(%s) in %d seconds." % (best_block_hash, int(time.time() - t1)))
 
-            t1 = time.time()
             # Loop through all the TXIDs in this block, and parse them all.
+            t1 = time.time()
             for tx in block_txs:
                 try:
                     rawtransaction = self.rpc_client.getrawtransaction(tx, 1)
@@ -1168,12 +1168,12 @@ class Publication:
                     print("Error while trying to retrieve TXID %s." % tx)
                     continue
 
-                ret_confirmations = int(rawtransaction['confirmations'])
                 vouts = rawtransaction['vout']
                 for vout in vouts:
 
                     if (vout['scriptPubKey']['type'] == 'scripthash') and (recipient_address in vout['scriptPubKey']['addresses']):
                         txrecord.set_txid(tx)
+                        txrecord.set_confirmations(int(rawtransaction['confirmations']))
                         txrecord.add_output_script(vout['scriptPubKey']['hex'])
                         txrecord.add_vout_num(int(vout['n']))
                         txrecord.add_value(vout['value'])
@@ -1194,16 +1194,21 @@ class Publication:
     # threshold.  Otherwise, the last record for each generation is preserved,
     # regardless of its confirmation number.
     def update_confirmations(self, purge = False, update_vout = False):
+        # The list of TXIDs to re-transmit due to network forks turning
+        # previously-confirmed transactions to an unconfirmed state.
+        retransmit = []
 
         # Update all the confirmation counts for all TxRecords in the list.
         for i in range(0, self.num_transactions):
             for txrecord in self.txrecords[i]:
                 txid = txrecord.get_txid()
+                previous_confirmations = txrecord.get_confirmations()
                 if txid is not None:
                     rawtransaction = self.rpc_client.getrawtransaction(txid, 1)
                     if 'confirmations' in rawtransaction:
-                        confirmations = int(rawtransaction['confirmations'])
-                        txrecord.set_confirmations(confirmations)
+                        txrecord.set_confirmations(int(rawtransaction['confirmations']))
+                    else: # Explicitly set it to 0, in case of a network fork.
+                        txrecord.set_confirmations(0)
 
                     if update_vout and 'vout' in rawtransaction and len(txrecord.get_output_scripts()) == 0 and len(txrecord.get_vout_nums()) == 0 and len(txrecord.get_values()) == 0:
                         vouts = rawtransaction['vout']
@@ -1212,14 +1217,42 @@ class Publication:
                             txrecord.add_vout_num(int(vout['n']))
                             txrecord.add_value(vout['value'])
 
+                # Check if a network fork caused this previously-confirmed
+                # transaction to become unconfirmed.
+                if (previous_confirmations > 0) and (txrecord.get_confirmations() == 0) and (txrecord.get_txid() is not None):
+                    retransmit.append(txrecord.get_txid())
 
-        confirmation_threshold = self.get_confirmation_threshold()
+
+        # Go through the list of TXIDs that became unconfirmed due to a network
+        # fork.  Re-transmit each one to speed up propagation in the memory
+        # pools.
+        #
+        # This re-transmission may not be strictly necessary, but in a test
+        # environment, foreign nodes were not observed to receive the
+        # unconfirmed transactions from the original sender even after a few
+        # hours (though they remained in the sender's mempool).  Re-transmitting
+        # them here is theorized to speed up propagation, in hopes of speeding
+        # up resumption of publication.  Either way, it can't hurt, sooo...
+        if len(retransmit) > 0:
+            self.d('FOUND %d TXIDS THAT HAVE BEEN ROLLED BACK DUE TO A NETWORK FORK.' % len(retransmit))
+
+        for txid in retransmit:
+            self.d('Re-transmitting TXID %s...' % txid)
+            signed_raw_tx_hex = self.rpc_client.getrawtransaction(txid, 0)
+            try:
+                self.rpc_client.sendrawtransaction(signed_raw_tx_hex)
+            except urllib.error.HTTPError as e:
+                self.d('An exception was caught while re-transmitting TXID %s (this can probably be ignored): %d: %s' % (txid, e.code, e.read().decode('ascii')))
+        if len(retransmit) > 0:
+            self.d('DONE RE-TRANSMITTING TXIDS.')
+
 
         # Go through the list again now that all confirmation counts are
         # updated.  If the current TxRecord is passed the threshold as well as
         # the next one, remove the current TxRecord.  The next record matters
         # because to re-transmit a transaction, information from the previous
         # TxRecord (its redeemscripts) are needed.
+        confirmation_threshold = self.get_confirmation_threshold()
         for i in range(0, self.num_transactions):
             generation = self.txrecords[i]
             j = 0
