@@ -189,6 +189,20 @@ class Utils:
         return best_compression_bytes, best_compression_type
 
 
+    # Given a chain (Publication.BLOCKCHAIN_*), return the name of its daemon
+    # program ('bitcoind', 'dogecoind', etc).
+    @staticmethod
+    def get_daemon_name(chain):
+        from Publication import Publication
+
+        if chain == Publication.BLOCKCHAIN_BTC:
+            return 'bitcoind'
+        elif chain == Publication.BLOCKCHAIN_DOGE:
+            return 'dogecoind'
+        else:
+            return None
+
+
     # Estimates the cost and time to publish the specified file.  'filepath'
     # is the file to estimate, 'chain' is the blockchain to estimate (BTC or
     # DOGE), 'num_outputs' is the number of outputs per transaction,

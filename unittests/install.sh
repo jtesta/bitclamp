@@ -80,7 +80,7 @@ echo $wipe_output >> ~dogereader/.bashrc
 chmod 0700 ~btcwriter/*.sh ~btcreader/*.sh ~dogewriter/*.sh ~dogereader/*.sh 
 
 # Initialize the BTC blockchain and start up the daemons.
-su - btcwriter -c "~/btc_reset_writer.sh && ~/btc_run_bitcoind_writer.sh"
+su - btcwriter -c "~/btc_reset_writer.sh $PROJECT_BASE_DIR/BlockClient.py \$HOME/block_listeners.txt && ~/btc_run_bitcoind_writer.sh"
 su - btcreader -c "mkdir -m 0700 \$HOME/output && ~/btc_reset_reader.sh $PROJECT_BASE_DIR/blockchain_watcher.py \$HOME/output \$HOME/output/bitclamp_sqlite.db && ~/btc_run_bitcoind_reader.sh"
 
 # Wait for the service to start
@@ -155,7 +155,7 @@ echo
 
 
 # Initialize the DOGE blockchain and start up the daemons.
-su - dogewriter -c "~/doge_reset_writer.sh && ~/doge_run_dogecoind_writer.sh"
+su - dogewriter -c "~/doge_reset_writer.sh $PROJECT_BASE_DIR/BlockClient.py \$HOME/block_listeners.txt && ~/doge_run_dogecoind_writer.sh"
 su - dogereader -c "mkdir -m 0700 \$HOME/output && ~/doge_reset_reader.sh $PROJECT_BASE_DIR/blockchain_watcher.py \$HOME/output \$HOME/output/bitclamp_sqlite.db && ~/doge_run_dogecoind_reader.sh"
 
 

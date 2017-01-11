@@ -1,37 +1,71 @@
-The rest of this document will only talk about Bitcoin for readability purposes, but know that everything applies to Dogecoin as well.
+NOTE:  For readability purposes, this document will only talk about Bitcoin,
+but know that everything applies to Dogecoin as well.
 
 
--= Installation =-
+1. Installation
 
-Get the bitcoind/dogecoind server program.  This can be done by compiling by source (which is trickier than you would expect), or by downloading a pre-compiled version.  In either case, if you are working with Bitcoin specifically, use Bitcoin Classic instead of Bitcoin Core (because reasons).
-
-
--= Setup =-
-
-This tool communicates with the Bitcoin RPC server to create, send, and parse transactions.  Ensure that you have the bitcoind and/or bitcoin-qt programs installed.  Edit the ~/.bitcoin/bitcoin.conf (or Dogecoin equivalent) and set the rpcuser, rpcpassword, rpcport values.  The password will not need to be typed in or remembered by a human, so this should be very long and complex (i.e.: 25 alphanumeric characters OR MORE).
-
-This tool also requires the server to maintain a transaction index.  This not the default mode.  If you've never run it on this machine before, then you can start it with:
-
-   bitcoind -daemon -txindex
-
-Otherwise, if you have part (or all) of the blockchain downloaded, you will need to run it with the following arguments:
-
-   bitcoind -daemon -txindex -rescan
-
-The "-rescan" option is needed to build the transaction index from scratch.  This is a CPU-intensive operation that may take 24 - 48 hours (!).  Unfortunately, there is no way around this.
+Get the bitcoind and/or dogecoind server programs.  This can be done by
+compiling by source (which is trickier than you would expect), or by
+downloading a pre-compiled version.  In either case, if you are working with
+Bitcoin specifically, use Bitcoin Classic instead of Bitcoin Core (because
+reasons).
 
 
-Regardless of what you do above, restarting the server in the future should be done with:
+2. Setup For Publication
 
-   bitcoind -daemon -txindex
+Once bitcoind and/or dogecoind is installed, you must configure its RPC service
+and download the entire blockchain.  This takes 1-2 days of time, and 100GB of
+free space for Bitcoin and/or 20GB of free space for Dogecoin.
 
-Note that "-rescan" is not necessary, and in fact, should NOT be used after the initial setup.  From this point on, because the transaction index already exists, the server will start up in a matter of seconds or minutes.
+To set up the RPC service, edit the ~/.bitcoin/bitcoin.conf (or Dogecoin
+equivalent) and set the rpcuser, rpcpassword, rpcport values.  The password
+will not need to be typed in or remembered by a human, so this should be very
+long and complex (i.e.: 25 alphanumeric characters OR MORE).  To auto-generate
+a good password, run:
 
-IMPORTANT: if you also run the GUI client, you MUST run it with the "-txindex" option.  Otherwise, it will prompt you to rescan the blockchain, which DESTROYS the transaction index (which, as noted above, takes 24 - 48 hours to rebuild).
+    echo `cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1`
+
+Bitclamp requires the server to maintain a transaction index.  This is NOT the
+default mode.  If you've never run bitcoind on this machine before, then start
+it with:
+
+   $ bitcoind -daemon -txindex
+
+Otherwise, if you have part (or all) of the blockchain already downloaded, you
+will need to run it with the following arguments (this will re-build the
+transaction index from scratch, which may take 24-48 hours!):
+
+   $ bitcoind -daemon -txindex -rescan
 
 
-Finally, to verify that setup is complete, run the bitcoin-cli tool and check that the latest block number has been obtained:
+Verify that you can query the RPC service with (this should return a number
+greater than 0):
 
-   bitcoin-cli getblockcount
+   $ bitcoin-cli getblockcount
 
-Wait patiently until the entire blockchain is downloaded and synchronized.  This can take 1-2 days to complete as well.  Once complete, see the README.txt file to see examples on how to publish and extract files.
+
+Now wait patiently until the entire blockchain is downloaded and synchronized.
+This can take 1-2 days to complete (you'll know its complete when the
+getblockcount query above returns the same number after waiting a few minutes
+in between).
+
+Initial setup is now complete.  Be sure to ALWAYS run bitcoind and/or the
+GUI client with the "-txindex" option.  Otherwise, it will prompt you to
+destroy the index, which would take 24-48 hours to rebuild!
+
+Refer to README.txt for examples on how to publish files.
+
+
+3. Setup For Passive Monitoring Of New Content
+
+You can monitor all new content published in the blockchain in realtime.
+Simply run bitcoind with the following options:
+
+   $ bitcoind -daemon -txindex -blocknotify="python3 /path/to/blockchain_watcher.py btc /path/where/sqlite_db/should/go/sqlite.db /path/to/empty/folder/where/content/should/be/written/ /path/where/log/should/be/written/log.txt %s -d"
+
+If you run this before any blockchain data is downloaded, it will extract ALL
+content.  If its run after, say, 1000 blocks are obtained, then only content
+in blocks 1001 and onwards will be extracted.
+
+To extract specific content, use bitclamp_extracterizer.py, as documented in
+Section 2: "Explicit Extraction of Content" of README.txt.

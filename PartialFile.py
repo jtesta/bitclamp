@@ -221,7 +221,10 @@ class PartialFile:
             f.write(file_bytes)
 
          # Remove the encrypted file.
-         os.unlink(self.file_path)
+         try:
+            os.unlink(self.file_path)
+         except FileNotFoundError:
+            pass
 
       else:
          # Move file out of partial directory into output directory.
@@ -231,7 +234,10 @@ class PartialFile:
       self.file_path = new_file_path
 
       # Delete the state file.
-      os.unlink(self.state_file)
+      try:
+         os.unlink(self.state_file)
+      except FileNotFoundError:
+         pass
 
       # Update the final block number.
       self.final_block_num = block_num

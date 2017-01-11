@@ -19,7 +19,7 @@ else
 fi
 
 RPCPASS=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
-echo -e "rpcuser=bitcoin\nrpcpassword=$RPCPASS\nrpcport=8889\n" > ~/.bitcoin/bitcoin.conf
+echo -e "rpcuser=bitcoin\nrpcpassword=$RPCPASS\nrpcport=8890\n" > ~/.bitcoin/bitcoin.conf
 chmod 0600 ~/.bitcoin/bitcoin.conf
 
 sed -i "s,^BLOCKCHAIN_WATCHER_PATH=.*$,BLOCKCHAIN_WATCHER_PATH=$SCRIPT_PATH,g" btc_run_bitcoind_reader.sh

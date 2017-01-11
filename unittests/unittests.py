@@ -28,16 +28,15 @@ def exit_handler():
 
 # Creates a file filled with random bytes of a specified size.  Publishes that
 # file with 'num_outputs' outputs and 'num_transactions' parallel transactions.
-# 'gen_wait' is the number of seconds to wait in between blocks.
-def rand_file_test(size, num_outputs = 5, num_transactions = 1, gen_wait = 1.2, additional_args = ''):
+def rand_file_test(size, num_outputs = 5, num_transactions = 1, additional_args = ''):
   rand_filename = 'rand_%d_%dOut_%dTX.bin' % (size, num_outputs, num_transactions)
   rand_bin, rand_bin_hash = make_rand_file(rand_filename, size)
 
   filepath_complete = get_published_file_path(rand_filename)
-  return general_file_test(rand_bin, rand_bin_hash, filepath_complete, num_outputs, num_transactions, gen_wait, additional_args)
+  return general_file_test(rand_bin, rand_bin_hash, filepath_complete, num_outputs, num_transactions, additional_args)
 
 
-def general_file_test(filepath_source, filepath_source_hash, filepath_complete, num_outputs = 5, num_transactions = 1, gen_wait = 1.2, additional_args = ''):
+def general_file_test(filepath_source, filepath_source_hash, filepath_complete, num_outputs = 5, num_transactions = 1, additional_args = ''):
   output_file, address_path = begin_test()
 
   # If the defaults are used, don't include --noutputs and -ntransactions.
@@ -69,7 +68,7 @@ def general_file_test(filepath_source, filepath_source_hash, filepath_complete, 
 
 # Tests the deadman switch functionality.  Publishes a deadman switch file, then
 # its key.  Ensures that the file is unreadable until the key is given.
-def deadman_switch_test(data, num_outputs = 5, num_transactions = 1, gen_wait = 1.2):
+def deadman_switch_test(data, num_outputs = 5, num_transactions = 1):
   unused, unused2 = begin_test()
 
   # Create a random filename in the writer's temp directory.  Delete the empty
@@ -133,15 +132,15 @@ def deadman_switch_test(data, num_outputs = 5, num_transactions = 1, gen_wait = 
 
 
 # Begins publishing a file, then interrupts it and resumes it.
-def restore_test(size = -1, num_outputs = 5, num_transactions = 1, gen_wait = 1.2):
+def restore_test(size = -1, num_outputs = 5, num_transactions = 1):
   from os import urandom
   from random import randrange
 
   output_file, address_path = begin_test()
 
-  # If no size was specified, choose a random size from 8K to 12K.
+  # If no size was specified, choose a random size from 30K to 34K.
   if size == -1:
-    size = (int.from_bytes(urandom(2), byteorder='little') % 4096) + 8192
+    size = (int.from_bytes(urandom(2), byteorder='little') % 4096) + 30720
 
   # Interrupt the publication randomly after 25 - 50% of it is completed.
   interrupt_size = int((size * randrange(25, 50)) / 100)
@@ -160,26 +159,31 @@ def restore_test(size = -1, num_outputs = 5, num_transactions = 1, gen_wait = 1.
     pub_ctrl = '--noutputs=%d --ntransactions=%d' % (num_outputs, num_transactions)
 
   # Begin publication, but stop before fully finishing.
-  ret, proc, bitclamp_stdout_file, unused = run_bitclamp('--debug --file=%s --content-type=undefined %s --unittest-publication-address=%s' % (rand_bin, pub_ctrl, address_path), expected_output_file=filepath_partial, expected_output_file_size=interrupt_size)
-
+  ret, proc, bitclamp_stdout_file, unused = run_bitclamp('--file=%s --content-type=undefined %s' % (rand_bin, pub_ctrl), expected_output_file=filepath_partial, expected_output_file_size=interrupt_size)
 
   if ret is False:
+    print('Initial publication session failed!')
     print_output_file(bitclamp_stdout_file)
     stop_bitclamp(proc, bitclamp_stdout_file)
     if os.path.isfile(filepath_partial):
       os.remove(filepath_partial)
     return False
 
+  if proc.poll() is not None:
+    print('Bitclamp is no longer running after initial publication session! %s %d %d' % (filepath_partial, interrupt_size, size))
+    return False
+
   # Kill the bitclamp process.  This writes out the state file to disk.
   stop_bitclamp(proc, bitclamp_stdout_file)
 
   # Generate 100 blocks.
-  generate_blocks(100, 0)
+  generate_blocks(100, False)
 
   # Restore publication using the state file.
-  ret, proc, bitclamp_stdout_file, unused = run_bitclamp('--debug --restore=%s' % (get_state_file()), expected_output_file=filepath_complete, expected_output_file_size=size)
+  ret, proc, bitclamp_stdout_file, unused = run_bitclamp('--restore=%s' % (get_state_file()), expected_output_file=filepath_complete, expected_output_file_size=size)
 
   if ret is False:
+    print('Publication restoration session failed!')
     print_output_file(bitclamp_stdout_file)
   elif does_output_file_match(filepath_complete, rand_bin_hash) is False:
     print('ERROR: original file hash does not match published file hash!')
@@ -238,7 +242,7 @@ def Core_Plaintext_Repeating_NoCompression_Variable():
 
 # Publishes a random 64KB file with 10 outputs and 3 transactions per block.
 def Core_Rand_64KB_10Out_3TX():
-  return rand_file_test(64*1024, 10, 3)
+  return rand_file_test(64*1024, num_outputs=10, num_transactions=3)
 
 
 # Publishes an 8KB deadman switch, and then its key.
@@ -296,17 +300,17 @@ def Aux_Custom_Description():
 
 # 1MB random file with 20 outputs and 10 transactions.
 def Aux_Rand_1MB_20Out_10TX():
-  return rand_file_test(1024*1024, num_outputs=20, num_transactions=10, gen_wait=2.1)
+  return rand_file_test(1024*1024, num_outputs=20, num_transactions=10)
 
 
-# 100KB random file.  Takes almost 2 minutes to complete.
+# 100KB random file.
 def Aux_Rand_100KB():
-  return rand_file_test(100*1024, gen_wait=1.7)
+  return rand_file_test(100*1024)
 
 
-# 512KB random file.  Takes over 7 minutes to complete.
+# 512KB random file.
 def Aux_Rand_512KB():
-  return rand_file_test(512*1024, gen_wait=1.7)
+  return rand_file_test(512*1024)
 
 
 # Use bitclamp_extracterizer.py to extract content.
@@ -460,4 +464,7 @@ if __name__ == "__main__":
     else:
       print("\nALL %d %s TESTS PASSED!!\n" % (len(tests), network))
 
-  exit(0)
+  if num_failed == 0:
+    exit(0)
+  else:
+    exit(-1)

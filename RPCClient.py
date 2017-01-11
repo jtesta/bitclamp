@@ -34,6 +34,7 @@ class RPCClient:
             raise Exception('hostname must be localhost or 127.0.0.1 since HTTPS is not supported!')
 
         self.url = 'http://%s:%d/' % (self.hostname, self.port)
+        self.config_file = None
 
 
     def send_request(self, method, params=[]):
@@ -57,6 +58,10 @@ class RPCClient:
         return self.send_request('createrawtransaction', "[%s,%s]" % (inputs, outputs))
 
 
+    def decoderawtransaction(self, raw_tx):
+        return self.send_request('decoderawtransaction', [raw_tx])
+
+
     def dumpprivkey(self, address):
         return self.send_request('dumpprivkey', [address])
 
@@ -65,12 +70,12 @@ class RPCClient:
         return float(self.send_request('estimatefee', [n]))
 
 
-    def getbestblockhash(self):
-        return self.send_request('getbestblockhash')
-
-
     def getblock(self, block_hash):
         return self.send_request('getblock', [block_hash])
+
+
+    def getblockchaininfo(self):
+        return self.send_request('getblockchaininfo')
 
 
     def getblockcount(self):
@@ -100,6 +105,9 @@ class RPCClient:
     def signrawtransaction(self, raw_tx, stuffs, privkey):
         return self.send_request('signrawtransaction', [raw_tx, stuffs, [privkey]])
 
+    def stop(self):
+        return self.send_request('stop')
+
 
     def validateaddress(self, address):
         return self.send_request('validateaddress', [address])
@@ -124,4 +132,6 @@ class RPCClient:
             else:
                 rpcport = 8332
 
-        return RPCClient(rpchost, rpcport, rpcuser, rpcpass)
+        rpc_client = RPCClient(rpchost, rpcport, rpcuser, rpcpass)
+        rpc_client.config_file = config_file
+        return rpc_client

@@ -16,7 +16,7 @@
 
 # Utility functions for the unit test framework.
 
-import hashlib, math, os, subprocess, time
+import fcntl, hashlib, math, os, pickle, subprocess, time
 
 # A list of temporary files created by make_temp_file().
 temp_files = []
@@ -30,8 +30,18 @@ bitclamp_extracterizer_py = None
 # The temp directory inside the writer's home directory.
 writer_tempdir = None
 
+# The full path to the file used by the writer's BlockClient which holds the
+# active BlockListeners.
+writer_block_listener_file = None
+
 # The output directory inside the reader's home directory.
 reader_outputdir = None
+
+# The partial directory inside the reader's output directory.
+reader_partialdir = None
+
+# The reader's lockfile.
+reader_lockfile = None
 
 # The address to send all change to.
 change_address = None
@@ -66,8 +76,9 @@ def begin_test():
       os.remove(full_path)
 
   # Delete all files in the partial/ sub-directory.
-  for f in os.listdir(os.path.join(reader_outputdir, 'partial/')):
-    os.remove(os.path.join(reader_outputdir, 'partial/', f))
+  if os.path.isdir(reader_partialdir):
+    for f in os.listdir(reader_partialdir):
+      os.remove(os.path.join(reader_partialdir, f))
 
   # Delete all *.state files.
   writer_home_dir = os.path.expanduser('~%s' % user_writer)
@@ -184,15 +195,30 @@ def exec_wait_reader(arg_str, stdin_str = ''):
   return exec_wait(user_reader, arg_str, stdin_str)
 
 
-# Generates 'num_blocks', and waits 'gen_wait' seconds afterwards.
-def generate_blocks(num_blocks, gen_wait):
-  exec_wait(user_writer, '/bin/bash -c "%s generate %d \$PUBKEY; sleep %.1f"' % (cli, num_blocks, gen_wait))
+# Generates blocks as the writer user.  If wait_for_mempool is True, then
+# it will wait up to 1 second until at least one transaction is found in the
+# mempool (after the time has elapsed, the block(s) will be generated
+# regardless).
+def generate_blocks(num_blocks, wait_for_mempool):
+
+  if wait_for_mempool:
+    so = ''
+    timeout = 0.0
+    while (len(so) < 64) and timeout < 1:
+      so, se = exec_wait(user_writer, '/bin/bash -c "%s getrawmempool"' % cli)
+
+      # If nothing is in the mempool, then sleep 100ms and loop.
+      if len(so) < 64:
+        time.sleep(0.1)
+        timeout += 0.1
+
+  exec_wait(user_writer, '/bin/bash -c "%s generate %d \$PUBKEY"' % (cli, num_blocks))
 
 
 # Given a filename, returns its full path in the reader's partial output
 # directory.
 def get_partial_file_path(filename):
-  return os.path.join(reader_outputdir, 'partial/', filename)
+  return os.path.join(reader_partialdir, filename)
 
 
 # Given a filename, returns its full path in the reader's output directory.
@@ -200,20 +226,21 @@ def get_published_file_path(filename):
    return os.path.join(reader_outputdir, filename)
  
 
-# Retrieves the publication address and amount from a bitclamp process.  The
-# --unittest-publication-address argument tells bitclamp.py where to save the
-# publication address and amount on the filesystem; the path to that file is
-# the argument to this function.
+# Retrieves the publication address, amount, and block listener port from a
+# bitclamp process.  The --unittest-publication-address argument tells
+# bitclamp.py where to save the publication address and amount on the
+# filesystem; the path to that file is the argument to this function.
 #
-# Returns a tuple containing the publication address and amount on success (and
-# deletes the file), or (None, None) on error.
-def get_publication_address(address_path, output_file):
+# Returns a tuple containing the publication address, amount, and block
+# listener port on success (and deletes the file), or (None, None, None) on
+# error.
+def get_publication_info(publication_info_path):
   i = 0
-  continueFlag = True
-  while continueFlag is True:
+  continue_flag = True
+  while continue_flag:
     # If the file exists and is not empty, we are done waiting.
-    if os.path.isfile(address_path) and os.path.getsize(address_path) > 0:
-      continueFlag = False
+    if os.path.isfile(publication_info_path) and os.path.getsize(publication_info_path) > 0:
+      continue_flag = False
 
     # Otherwise, wait up to 7 seconds.
     else:
@@ -222,23 +249,20 @@ def get_publication_address(address_path, output_file):
       # If we've been waiting over 7 seconds, we failed.
       i += 1
       if i > 14:
-        # Print out the output file; perhaps there's useful debugging info
-        # there.
-        print("Failed to get the publication address & amount!")
-        with open(output_file, 'r') as f:
-          print(f.read())
-        return None, None
+        return None, None, None
 
   line = None
-  with open(address_path, 'r') as f:
+  with open(publication_info_path, 'r') as f:
+    fcntl.lockf(f, fcntl.LOCK_SH)
     line = f.read()
 
   # Delete the file.
-  os.remove(address_path)
+  os.remove(publication_info_path)
 
-  # Return a tuple containing the publication address and amount.
+  # Return a tuple containing the publication address, amount, and block
+  # listener port.
   fields = line.split(' ')
-  return fields[0], fields[1]
+  return fields[0], fields[1], int(fields[2])
 
 
 # Returns the *.state file for the terminated bitclamp process (used for
@@ -256,7 +280,7 @@ def get_state_file():
 # Initializes the Utils subsystem.
 def init_utils(code_dir, chain):
 
-  global chain_str, chain_btc, cli, writer_tempdir, bitclamp_py, bitclamp_extracterizer_py, user_writer, user_reader, change_address, reader_outputdir, btc_classic, sqlite3_file
+  global chain_str, chain_btc, cli, writer_tempdir, writer_block_listener_file, bitclamp_py, bitclamp_extracterizer_py, user_writer, user_reader, change_address, reader_outputdir, reader_partialdir, reader_lockfile, btc_classic, sqlite3_file
 
   chain_str = chain.lower()
   chain_btc = True
@@ -272,8 +296,12 @@ def init_utils(code_dir, chain):
   # Get the path to the writer's temp directory.
   writer_tempdir = os.path.join(os.path.expanduser('~%s' % user_writer), 'tmp/')
 
+  # Get the path to the writer's block listener file.
+  writer_block_listener_file = os.path.join(os.path.expanduser('~%s' % user_writer), 'block_listeners.txt')
+
   # Get the path to the reader's output directory.
   reader_outputdir = os.path.join(os.path.expanduser('~%s' % user_reader), 'output/')
+  reader_partialdir = os.path.join(reader_outputdir, 'partial/')
 
   # Delete the log file in the reader's output directory, if it exists.
   log_file = os.path.join(reader_outputdir, 'log.txt')
@@ -281,9 +309,9 @@ def init_utils(code_dir, chain):
     os.remove(log_file)
 
   # Delete the lock file in the reader's output directory, if it exists.
-  lock_file = os.path.join(reader_outputdir, 'lockfile')
-  if os.path.isfile(lock_file):
-    os.remove(lock_file)
+  reader_lockfile = os.path.join(reader_outputdir, 'lockfile')
+  if os.path.isfile(reader_lockfile):
+    os.remove(reader_lockfile)
 
   # Delete the SQLite3 database, if it exists.
   sqlite3_file = os.path.join(reader_outputdir, 'bitclamp_sqlite.db')
@@ -374,8 +402,6 @@ def print_output_file(bitclamp_stdout_file):
 #   expected_output_file: the output filename expected upon successful
 #                         publication.
 #   expected_output_file_size: the output file size expected.
-#   gen_wait:             the number of seconds to wait in between generating
-#                         blocks.
 #   num_outputs:          the number of outputs to send per transaction.
 #   num_transactions:     the number of parallel transactions to transmit per
 #                         block.
@@ -383,13 +409,13 @@ def print_output_file(bitclamp_stdout_file):
 # Returns a tuple containing a boolean denoting success or failure, the process
 # handle, a file handle to bitclamp's stdout & stderr stream, and the output
 # file created (useful for when publications with no filename are made).
-def run_bitclamp(args, expected_output_file, expected_output_file_size = 0, gen_wait = 1.2, num_outputs = 5, num_transactions = 1):
+def run_bitclamp(args, expected_output_file, expected_output_file_size = 0, num_outputs = 5, num_transactions = 1):
   ret = True
 
   is_restore_operation = (args.find('--restore=') != -1)
 
   bitclamp_stdout_file = make_temp_file()
-  address_path = make_temp_file()
+  publication_info_path = make_temp_file()
 
   # If the defaults are used, don't include --noutputs and -ntransactions.
   # This mimics how the user invokes the program, which can better test for
@@ -400,23 +426,40 @@ def run_bitclamp(args, expected_output_file, expected_output_file_size = 0, gen_
 
   # If this isn't a publication restoration, add some default arguments.
   if not is_restore_operation:
-    args = '--regtest %s %s --change=%s --unittest-publication-address=%s' % (args, pub_ctrl, change_address, address_path)
+    args = '--regtest %s %s --change=%s --unittest-publication-address=%s' % (args, pub_ctrl, change_address, publication_info_path)
     if chain_btc:
       args = '%s --chain=btc --txfee=0.0003' % args
     else:
       args = '%s --chain=doge --txfee=1' % args
+  else:
+    args = '%s --unittest-publication-address=%s' % (args, publication_info_path)
+
+  args = '%s --debug --daemon=existing' % args
 
   # Run bitclamp in the background and return immediately.
   proc, output_fd = exec_async(user_writer, 'python3 %s %s' % (bitclamp_py, args), bitclamp_stdout_file)
   output_fd.close()
 
-  # If this is not a restoration operation, get the publication address and
-  # send funds to it.
+  publish_address, amount, block_listener_port = get_publication_info(publication_info_path)
+  if publish_address is None:
+    print('Failed to get publication address & amount. %s, %r, %d, [%s]' % (publication_info_path, os.path.isfile(publication_info_path), os.path.getsize(publication_info_path), args))
+    print_output_file(bitclamp_stdout_file)
+    return False, proc, bitclamp_stdout_file, ''
+
+  # If the block listener file doesn't exist, create it under the context of
+  # the writer user.
+  if not os.path.isfile(writer_block_listener_file):
+    exec_wait(user_writer, '/bin/bash -c "touch %s"' % writer_block_listener_file)
+
+  # Write the port of the BlockListener to the file so that the writer's
+  # BlockClient can connect to it.
+  with open(writer_block_listener_file, 'w+') as f:
+    fcntl.lockf(f, fcntl.LOCK_EX)
+    f.write("localhost %d 0 0\n" % block_listener_port)
+
+  # If we aren't restoring an interrupted publication, send the required
+  # funds to the publication address.
   if not is_restore_operation:
-    publish_address, amount = get_publication_address(address_path, bitclamp_stdout_file)
-    if publish_address is None:
-      print("FAILED TO GET PUBLICATION ADDRESS & AMOUNT!")
-      return False, proc, bitclamp_stdout_file, None
 
     # Round up the amount if we're using dogecoin.
     if not chain_btc:
@@ -428,31 +471,54 @@ def run_bitclamp(args, expected_output_file, expected_output_file_size = 0, gen_
     send_funds(publish_address, amount)
 
   # If the expected_output_file is None (i.e.: when we are testing publications
-  # with no filenames), look in the partial directory for a file that begins
-  # with 'unnamed_file_'.  That is the prefix for files that were published
-  # with a blank filename.
+  # with no filenames), look in the output and partial directories for a file
+  # that begins with 'unnamed_file_'.  That is the prefix for files that were
+  # published with a blank filename.
   if expected_output_file is None:
-    partial_dir = os.path.join(reader_outputdir, 'partial/')
 
     # The partial directory may be empty at this point, so generate blocks
-    # until its not.
-    while os.listdir(partial_dir) == []:
-      generate_blocks(1, gen_wait)
+    # until its not (and while bitclamp is still running).
+    while (proc.poll() is None) and expected_output_file is None:
 
-    # Look through the partial directory and find one named "unnamed_file_*".
-    for f in os.listdir(partial_dir):
-      if f.startswith('unnamed_file_') and not f.endswith('.state'):
-        expected_output_file = os.path.join(reader_outputdir, f)
+      # Ensure that the reader processed all the blocks that the writer has
+      # written. 
+      wait_for_reader_writer_sync()
+
+      # Look through the reader's partial directory for a file that begins with
+      # "unnamed_file_"
+      for f in os.listdir(reader_partialdir):
+        if f.startswith('unnamed_file_') and not f.endswith('.state'):
+          expected_output_file = os.path.join(reader_outputdir, f)
+          break
+
+      # If we didn't find the file, generate a block and loop.  Otherwise,
+      # we're done.
+      if expected_output_file is None:
+        generate_blocks(1, True)
+      else:
         break
 
   # While bitclamp is still running, and while the output file doesn't exist
   # (or isn't large enough), keep generating blocks.
   while (proc.poll() is None) and ((os.path.isfile(expected_output_file) is False) or (os.path.getsize(expected_output_file) < expected_output_file_size)):
-    generate_blocks(1, gen_wait)
+    generate_blocks(1, True)
+
+  # Wait for the reader to fully sync up with the writer, to ensure that the
+  # reader has re-assembled the file properly on its end.
+  wait_for_reader_writer_sync()
 
   # Return True if the expected output file exists, and it is at least the
   # expected size.
   ret = os.path.isfile(expected_output_file) and (os.path.getsize(expected_output_file) >= expected_output_file_size)
+
+  if ret is False:
+    print('run_bitclamp() is returning False')
+    if not os.path.isfile(expected_output_file):
+      print('%s is not a file.' % expected_output_file)
+      print('reader output dir: %s' % ', '.join(os.listdir(reader_outputdir)))
+      print('reader partial dir: %s' % ', '.join(os.listdir(reader_partialdir)))
+    else:
+      print('%s exists, and is %d bytes.  Expected size: %d.' % (expected_output_file, os.path.getsize(expected_output_file), expected_output_file_size))
 
   return ret, proc, bitclamp_stdout_file, expected_output_file
 
@@ -465,10 +531,15 @@ def run_bitclamp_extracterizer(temp_dir, args = ''):
 # As the writer user, sends the specified amount to the specified address.
 def send_funds(address, amount):
   exec_wait(user_writer, '%s sendtoaddress %s %s' % (cli, address, amount))
+  generate_blocks(1, True)
 
 
 # Ensure that the bitclamp process is killed and the output file is deleted.
 def stop_bitclamp(proc, output_file):
+
+  # Truncate the block listener file.
+  with open(writer_block_listener_file, 'w') as f:
+    fcntl.lockf(f, fcntl.LOCK_EX)
 
   # If poll() is None, the process is still running, so kill it.
   if proc.poll() is None:
@@ -482,7 +553,52 @@ def stop_bitclamp(proc, output_file):
 
   # Ensure that the process is no longer running.
   if proc.poll() is None:
-    print("FAILED TO TERMINATE BITCLAMP PROCESS!")
+    print('Failed to terminate bitclamp process!')
 
   if os.path.isfile(output_file):
     os.remove(output_file)
+
+
+# Waits for the reader and writer to synchronize on the number of blocks they
+# each have.
+def wait_for_reader_writer_sync():
+
+  # Wait up to 60 seconds for the reader's lock file to be created.
+  timeout = 0
+  while (not os.path.isfile(reader_lockfile)) or (os.path.getsize(reader_lockfile) == 0):
+    time.sleep(1)
+    timeout += 1
+
+    if timeout > 60:
+      print('Timeout while waiting for reader\'s lock file.  Terminating.')
+      exit(-1)
+
+  # Get the number of blocks from the writer.
+  writer_block_count = -1
+  try:
+    so, se = exec_wait(user_writer, '/bin/bash -c "%s getblockcount"' % cli)
+    writer_block_count = int(so)
+  except Exception as e:
+    print('Failed to parse writer block count: %s' % str(e))
+    exit(-1)
+
+  # Loop until the reader's last processed block matches the writer's total
+  # block count.
+  reader_last_block_processed = -2
+  while reader_last_block_processed != writer_block_count:
+
+    block_info = None
+    while block_info is None:
+      try:
+        # Open the reader's lock file.  The latest block it parsed is stored
+        # inside.
+        with open(reader_lockfile, 'rb') as f:
+          fcntl.lockf(f, fcntl.LOCK_SH)
+          block_info = pickle.loads(f.read())
+      except Exception as e:
+        print('Error while reading reader\'s lock file: %s' % str(e))
+        exit(-1)
+
+      reader_last_block_processed = block_info['last_block_num_processed']
+      if reader_last_block_processed != writer_block_count:
+        time.sleep(0.2)

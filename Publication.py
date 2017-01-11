@@ -13,7 +13,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import binascii, hashlib, json, os, math, struct, sys, time
+import binascii, fcntl, hashlib, json, os, math, struct, sys, time
 
 from Utils import *
 from TxRecord import *
@@ -103,32 +103,33 @@ class Publication:
 
         # If only 9 arguments are present, the constructor for publishing
         # deadman switch keys should be used instead.
-        if len(args) == 9:
+        if len(args) == 10:
             self.deadman_switch_key_init(args)
             return
 
         self.rpc_client = args[0]
-        self.filepath = args[1]
-        self.content_type = args[2]
-        self.compression_type = args[3]
-        self.filename = args[4]
-        self.file_description = args[5]
-        self.nocrypto = args[6]
-        self.nohash = args[7]
-        self.deadman_switch_path = args[8]
-        self.blockchain = args[9]
-        self.test_or_reg_network = args[10]
-        self.num_outputs = args[11]
-        self.num_transactions = args[12]
-        self.txfee = args[13]
-        self.change_address = args[14]
-        self.debug = args[15]
-        self.verbose = args[16]
+        self.block_listener = args[1]
+        self.filepath = args[2]
+        self.content_type = args[3]
+        self.compression_type = args[4]
+        self.filename = args[5]
+        self.file_description = args[6]
+        self.nocrypto = args[7]
+        self.nohash = args[8]
+        self.deadman_switch_path = args[9]
+        self.blockchain = args[10]
+        self.test_or_reg_network = args[11]
+        self.num_outputs = args[12]
+        self.num_transactions = args[13]
+        self.txfee = args[14]
+        self.change_address = args[15]
+        self.debug = args[16]
+        self.verbose = args[17]
 
         # If not None, this is the filesystem path were the initial publication
         # address and amount should be placed.  This is only used during unit
         # testing.
-        self.unittest_publication_address = args[17]
+        self.unittest_publication_address = args[18]
 
         if len(self.filepath) == 0:
             raise Exception('filepath arg is required!')
@@ -279,14 +280,15 @@ class Publication:
     # Special constructor for when publishing a deadman switch key.
     def deadman_switch_key_init(self, args):
         self.rpc_client = args[0]
-        self.filepath = args[1]
-        self.blockchain = args[2]
-        self.test_or_reg_network = args[3]
-        self.txfee = args[4]
-        self.change_address = args[5]
-        self.debug = args[6]
-        self.verbose = args[7]
-        self.unittest_publication_address = args[8]
+        self.block_listener = args[1]
+        self.filepath = args[2]
+        self.blockchain = args[3]
+        self.test_or_reg_network = args[4]
+        self.txfee = args[5]
+        self.change_address = args[6]
+        self.debug = args[7]
+        self.verbose = args[8]
+        self.unittest_publication_address = args[9]
 
         if not os.path.isfile(self.filepath):
             raise Exception("%s is not a regular file!" % self.filepath)
@@ -351,6 +353,28 @@ class Publication:
         self.deadman_switch_key_publish_mode = True
 
 
+    # When serializing this object, exclude the BlockListener, as it contains
+    # a socket (among other things not worth keeping).  Also exclude the
+    # RPCClient, as it should be re-created upon restoration in case
+    # credentials are changed.
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        del state['block_listener']
+        del state['rpc_client']
+        del state['unittest_publication_address']
+        return state
+
+
+    # When restoring a serialized object, set block_listener to None; the
+    # set_block_listener() method should be used once the listener is
+    # available.
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.block_listener = None
+        self.rpc_client = None
+        self.unittest_publication_address = None
+
+
     # Prints a message when debugging is enabled.
     def d(self, s):
         if self.debug:
@@ -377,7 +401,7 @@ class Publication:
     # Returns the amount that each TX output should have, excluding the fee
     # (since vin - vout = fee).
     @staticmethod
-    def get_tx_output_amount(d, chain, total_amount, txfee, nbytes, noutputs):
+    def get_tx_output_amount(d, chain, total_amount, txfee, nbytes, noutputs, recurse_level=0):
         kb = nbytes / 1024
         if chain == Publication.BLOCKCHAIN_DOGE:
             kb = math.ceil(kb)
@@ -385,6 +409,18 @@ class Publication:
         # The fee for this upcoming transaction is the number of bytes we're
         # about to send, in KB, times the per-KB fee.
         fee = kb * txfee
+
+        # In a test environment, the Dogecoin daemon was observed to randomly
+        # reject a transaction because of 'insufficient priority'.  In that
+        # case, we will recurse and re-calculate the fee amount.  We will
+        # bump up an entire transaction's fee by 1 or 2 DOGE depending on how
+        # many consecutive failures we've had.
+        if (chain == Publication.BLOCKCHAIN_DOGE):
+            if recurse_level > 1:
+                fee += 2
+            elif recurse_level > 0:
+                fee += 1
+
         per_output_amount = (total_amount - fee) / noutputs
 
         # To account for any rounding, multiply the return value by the number
@@ -560,7 +596,6 @@ class Publication:
 
     # Begins the publication process.
     def begin(self):
-
         self.v('Beginning to publish %s using %d outputs per %d transaction%s / %d bytes per transaction.' % (self.filepath, self.num_outputs, self.num_transactions, 's' if (self.num_transactions > 1) else '', self.num_bytes_per_tx))
 
         # The number of blocks is calculated based on the file size, number of
@@ -632,9 +667,7 @@ class Publication:
         cost, unused0, unused1, unused2, unused3, num_block_generations, unused5, unused6 = Utils.get_estimate(self.rpc_client, self.filepath, self.blockchain, self.num_outputs, self.num_transactions, self.txfee)
         print("To begin publication, send %.8f %s to %s" % (cost + 0.00000001, self.get_currency_str(), p2sh_address))
 
-        if self.unittest_publication_address is not None:
-            with open(self.unittest_publication_address, 'w') as f:
-                f.write("%s %.8f" % (p2sh_address, cost+0.00000001))
+        self.write_unit_test_info(p2sh_address, cost+0.00000001, self.block_listener.port)
 
         cli = 'bitcoin-cli'
         if self.blockchain == Publication.BLOCKCHAIN_DOGE:
@@ -644,8 +677,7 @@ class Publication:
 
         # Wait for a transaction to get at least 1 confirmation which paid us
         # to begin.
-        if not self.wait_for_funds(txrecord, p2sh_address):
-            print("wait_for_funds() failed!")
+        self.wait_for_funds(txrecord, p2sh_address)
 
         print("Received funds.  Beginning publication...")
         self.received_funds = True
@@ -801,8 +833,7 @@ class Publication:
         # Keep waiting until all TxRecords have surpassed the confirmation
         # threshold.
         while not self.complete:
-            if not self.wait_for_new_block([], True):
-                print("wait_for_new_block() failed!")
+            self.wait_for_new_block([], True)
 
             i = 0
             self.d("\nTxRecords:")
@@ -979,7 +1010,7 @@ class Publication:
 
 
     # Transmits a transaction.
-    def send_transaction(self, txrecords, next_txrecord):
+    def send_transaction(self, txrecords, next_txrecord, recurse_level=0):
 
         # Using a bogus amount, get the length of this signed transaction
         signed_raw_tx_hex = self.create_and_sign_tx(txrecords, next_txrecord.p2sh_addresses, 0.00000001)
@@ -990,7 +1021,7 @@ class Publication:
         for txrecord in txrecords:
             total_amount += txrecord.get_total_amount()
 
-        next_total_amount, per_output_amount = Publication.get_tx_output_amount(self.d, self.blockchain, total_amount, self.txfee, tx_len, min(self.num_outputs, len(next_txrecord.p2sh_addresses)))
+        next_total_amount, per_output_amount = Publication.get_tx_output_amount(self.d, self.blockchain, total_amount, self.txfee, tx_len, min(self.num_outputs, len(next_txrecord.p2sh_addresses)), recurse_level)
         next_txrecord.set_total_amount(next_total_amount)
 
         # If we reached the end of the file, we send the final amount to one
@@ -1017,10 +1048,38 @@ class Publication:
         try:
             next_txid = self.rpc_client.sendrawtransaction(signed_raw_tx_hex)
         except urllib.error.HTTPError as e:
+            emesg = e.read().decode('ascii')
+
             # If the server complained that this transaction is already in the
             # blockchain, continue on.  Otherwise, re-throw the exception.
-            if (e.code != 500) or (e.read().decode('ascii').find('transaction already in block chain') == 0):
-                raise(e)
+            if (e.code == 500) and (emesg.find('transaction already in block chain') != -1):
+                # Get this transaction's TXID if sendrawtransaction had
+                # succeeded.
+                next_txid = self.rpc_client.decoderawtransaction(signed_raw_tx_hex)['txid']
+                self.d("Failed to send raw transaction: %s: %s\n\n[%s]" % (next_txid, e.read().decode('ascii'), signed_raw_tx_hex))
+
+            # Very rarely, Dogecoin transactions fail to send due to
+            # 'insufficient priority' even though enough fees are given.  This
+            # has been observed to occur at inconsistent points during unit
+            # testing, suggesting that there is some sort of temporal hiccup in
+            # the Dogecoin codebase.
+            #
+            # This code is an experimental attempt at working around the
+            # problem.  When encountered, we will recurse and bump up the fee
+            # by 1 or 2 DOGE to see if the transaction is accepted.
+            elif (emesg.find('insufficient priority') != -1) and (self.blockchain == Publication.BLOCKCHAIN_DOGE):
+
+                # Only recurse two levels deep.
+                if recurse_level > 2:
+                    self.d('Failed to send transaction even after 2 recurse levels. raw tx: [%s]' % signed_raw_tx_hex)
+                    exit(-1)
+
+                # Recurse and try again.  get_tx_output_amount() tracks the
+                # recurse level, and will bump up the fee by 1 or 2 DOGE.
+                return self.send_transaction(txrecords, next_txrecord, recurse_level + 1)
+
+            else:
+                self.d("Exception in sendrawtransaction: error code %d: %s; raw tx: [%s]" % (e.code, emesg, signed_raw_tx_hex))
 
         if len(next_txid) == 64:
             self.d("Sent!: %s" % next_txid)
@@ -1029,10 +1088,9 @@ class Publication:
             # If we are in deadman switch mode, and did not yet write out the
             # key, do that now.
             self.store_deadman_switch_key(next_txid)
-            return True
         else:
-            print("Failed: [%s]" % next_txid)
-            return False
+            print('Failed to send transaction: [%s]' % signed_raw_tx_hex)
+            exit(-1)
 
 
     # Creates a raw transaction and signs it.
@@ -1087,106 +1145,88 @@ class Publication:
         return signed_raw_tx['hex']
 
 
-    # Wait for a transaction to get at least 1 confirmation.
-    # TODO: change this architecture so that bitcoind/dogecoind isn't polled.
+    # Called only when restoring a Publication.
+    def set_unittest_publication_address(self, unittest_publication_address):
+        self.unittest_publication_address = unittest_publication_address
+        self.write_unit_test_info('X', 0.0, self.block_listener.port)
+
+
+    # Writes the publication address, initial required funds, and the
+    # BlockListener's port to a file.  Used by the unit testing framework to
+    # determine how to kick off a publication automatically.
+    def write_unit_test_info(self, p2sh_address, cost, block_listener_port):
+        if self.unittest_publication_address is not None:
+            with open(self.unittest_publication_address, 'w') as f:
+                fcntl.lockf(f, fcntl.LOCK_EX)
+                f.write("%s %.8f %d" % (p2sh_address, cost, block_listener_port))
+
+
+    # Wait for at least one block to be generated, then update the
+    # confirmations for the txrecords argument.
     def wait_for_new_block(self, txrecords, purge = False):
-        continue_flag = True
-        best_block_hash = self.rpc_client.getbestblockhash()
 
-        while continue_flag:
-            time.sleep(1)
+        # Wait for new blocks to come in.  We don't care about what they
+        # are, since we get the raw transactions using TXIDs below.
+        self.block_listener.wait_for_blocks()
 
-            block_hash = self.rpc_client.getbestblockhash()
+        # Update the confirmation count for all TxRecords we are currently
+        # maintaining.
+        self.update_confirmations(purge)
+        for txrecord in txrecords:
+            txid = txrecord.get_txid()
 
-            # If we havent found a new block, then loop back to the top and
-            # sleep.
-            if block_hash == best_block_hash:
-                continue
+            # If we are looking for a specific TXID...
+            if txid is not None:
+                # Try to get the JSON of the raw transaction.
+                rawtransaction = self.rpc_client.getrawtransaction(txid, 1)
 
-            self.d("Detected new block.  Block hash: %s" % block_hash)
-            best_block_hash = block_hash
-
-            # Update the confirmation count for all TxRecords we are currently
-            # maintaining.
-            self.update_confirmations(purge)
-            for txrecord in txrecords:
-                txid = txrecord.get_txid()
-
-                # If we are looking for a specific TXID...
-                if txid is not None:
-                    # Try to get the JSON of the raw transaction.
-                    rawtransaction = self.rpc_client.getrawtransaction(txid, 1)
-
-                    # Check if it has a "confirmations" field.  If not, this
-                    # TXID is still unconfirmed.
-                    if 'confirmations' in rawtransaction:
-                        confirmations = int(rawtransaction['confirmations'])
-                        if confirmations > 0:
-                            txrecord.set_confirmations(confirmations)
-                            if len(txrecord.get_output_scripts()) == 0 and len(txrecord.get_vout_nums()) == 0 and len(txrecord.get_values()) == 0:
-                                vouts = rawtransaction['vout']
-                                for vout in vouts:
-                                    txrecord.add_output_script(vout['scriptPubKey']['hex'])
-                                    txrecord.add_vout_num(int(vout['n']))
-                                    txrecord.add_value(vout['value'])
-                    else:
-                        self.d("No confirmation for %s" % txid)
-
-            return True
+                # Check if it has a "confirmations" field.  If not, this
+                # TXID is still unconfirmed.
+                if 'confirmations' in rawtransaction:
+                    confirmations = int(rawtransaction['confirmations'])
+                    if confirmations > 0:
+                        txrecord.set_confirmations(confirmations)
+                        if len(txrecord.get_output_scripts()) == 0 and len(txrecord.get_vout_nums()) == 0 and len(txrecord.get_values()) == 0:
+                            vouts = rawtransaction['vout']
+                            for vout in vouts:
+                                txrecord.add_output_script(vout['scriptPubKey']['hex'])
+                                txrecord.add_vout_num(int(vout['n']))
+                                txrecord.add_value(vout['value'])
+                else:
+                    self.d("No confirmation for %s" % txid)
 
 
-    # Waits for a initial publication funds.
+    # Waits for initial publication funds to be sent to the publication
+    # address.
     def wait_for_funds(self, txrecord, recipient_address):
-        continue_flag = True
-        best_block_hash = self.rpc_client.getbestblockhash()
 
-        while continue_flag:
-            time.sleep(1)
+        while True:
 
-            block_hash = self.rpc_client.getbestblockhash()
+            block_hashes = self.block_listener.wait_for_blocks()
+            for block_hash in block_hashes:
 
-            # If we havent found a new block, then loop back to the top and
-            # sleep.
-            if block_hash == best_block_hash:
-                continue
+                # Get the transactions in the block pointed to by this block
+                # hash, then loop through them and parse them all.
+                block_txs = self.rpc_client.getblock(block_hash)['tx']
+                for tx in block_txs:
+                    try:
+                        rawtransaction = self.rpc_client.getrawtransaction(tx, 1)
+                    except Exception as e:
+                        print('Error while trying to retrieve TXID %s: %s' % (tx, str(e)))
+                        continue
 
-            self.d("Detected new block.  Block hash: %s" % block_hash)
-            best_block_hash = block_hash
+                    vouts = rawtransaction['vout']
+                    for vout in vouts:
+                        if (vout['scriptPubKey']['type'] == 'scripthash') and (recipient_address in vout['scriptPubKey']['addresses']):
+                            txrecord.set_txid(tx)
+                            txrecord.set_confirmations(int(rawtransaction['confirmations']))
+                            txrecord.add_output_script(vout['scriptPubKey']['hex'])
+                            txrecord.add_vout_num(int(vout['n']))
+                            txrecord.add_value(vout['value'])
+                            self.d('Found sent funds (%s) in TXID %s' % (vout['value'], tx))
+                            return
 
-            # Get the latest block, which includes all the TXIDs.
-            t1 = time.time()
-
-            block_txs = self.rpc_client.getblock(best_block_hash)['tx']
-            self.d("Parsed getblock(%s) in %d seconds." % (best_block_hash, int(time.time() - t1)))
-
-            # Loop through all the TXIDs in this block, and parse them all.
-            t1 = time.time()
-            for tx in block_txs:
-                try:
-                    rawtransaction = self.rpc_client.getrawtransaction(tx, 1)
-                except Exception as e:
-                    print("Error while trying to retrieve TXID %s." % tx)
-                    continue
-
-                vouts = rawtransaction['vout']
-                for vout in vouts:
-
-                    if (vout['scriptPubKey']['type'] == 'scripthash') and (recipient_address in vout['scriptPubKey']['addresses']):
-                        txrecord.set_txid(tx)
-                        txrecord.set_confirmations(int(rawtransaction['confirmations']))
-                        txrecord.add_output_script(vout['scriptPubKey']['hex'])
-                        txrecord.add_vout_num(int(vout['n']))
-                        txrecord.add_value(vout['value'])
-                        self.d("Found sent funds (%s) in TXID %s" % (vout['value'], tx))
-                        continue_flag = False
-                        break
-
-                if continue_flag == False:
-                    break
-
-            self.d("Parsed all TXIDs in block in %d seconds." % int(time.time() - t1))
-
-        return True
+                self.d('Did not find funds in block %s' % block_hash)
 
 
     # Updates the confirmation count for all tracked transactions.  If purge is
@@ -1204,7 +1244,13 @@ class Publication:
                 txid = txrecord.get_txid()
                 previous_confirmations = txrecord.get_confirmations()
                 if txid is not None:
-                    rawtransaction = self.rpc_client.getrawtransaction(txid, 1)
+                    try:
+                        rawtransaction = self.rpc_client.getrawtransaction(txid, 1)
+                    except Exception as e:
+                        print(str(e))
+                        print("getrawtransaction exception: %s" % txid)
+                        exit(-1)
+
                     if 'confirmations' in rawtransaction:
                         txrecord.set_confirmations(int(rawtransaction['confirmations']))
                     else: # Explicitly set it to 0, in case of a network fork.

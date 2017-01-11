@@ -17,7 +17,7 @@ else
 fi
 
 RPCPASS=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
-echo -e "rpcuser=dogecoin\nrpcpassword=$RPCPASS\nrpcport=7778\n" > ~/.dogecoin/dogecoin.conf
+echo -e "rpcuser=dogecoin\nrpcpassword=$RPCPASS\nrpcport=7779\n" > ~/.dogecoin/dogecoin.conf
 chmod 0600 ~/.dogecoin/dogecoin.conf
 
 sed -i "s,^BLOCKCHAIN_WATCHER_PATH=.*$,BLOCKCHAIN_WATCHER_PATH=$SCRIPT_PATH,g" doge_run_dogecoind_reader.sh

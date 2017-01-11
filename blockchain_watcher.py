@@ -17,7 +17,7 @@
 # This program is called by bitcoind/dogecoind every time it finds a new block.
 # It extracts data and re-assembles files found in the blockchain.
 
-import atexit, binascii, fcntl, json, os, pickle, sqlite3, struct, sys
+import atexit, binascii, fcntl, json, os, pickle, sqlite3, struct, sys, traceback
 from BlockParser import *
 from RPCClient import *
 from Utils import *
@@ -26,6 +26,7 @@ debug = False
 fd = None
 lock_fd = None
 sqlite_db = None
+
 
 # Called when the program terminates.  It closes the log file handle and
 # releases the output directory lock.
@@ -60,7 +61,7 @@ def get_sqlite_connection(sqlite_path):
         db = sqlite3.connect(sqlite_path, isolation_level=None)
         db.execute('PRAGMA encoding = "UTF-8"')
 
-        # If chain = 0, the publication happened on the BTC network, otherwise
+        # If chain == 0, the publication happened on the BTC network, otherwise
         # it happened on the DOGE network.
         #
         # Note that the initial_txid and file_hash fields are in binary, not
@@ -125,105 +126,117 @@ if __name__ == '__main__':
     # Open the log file for appending.  If this fails, terminate.
     try:
         fd = open(log_file, 'a')
+        fcntl.lockf(fd, fcntl.LOCK_EX)
     except Exception as e:
+        print('Failed to open log file: %s' % log_file)
         sys.exit(-1)
 
-    # Get an RPCClient to work with.
-    rpc_client = RPCClient.init_from_config_file(chain)
+    try:
 
-    # Register the exit function.  This will close the log file handle upon
-    # program termination.
-    atexit.register(exit_func)
+        # Get an RPCClient to work with.
+        rpc_client = RPCClient.init_from_config_file(chain)
 
-    # Ensure that the output directory is writable.
-    if not os.access(output_dir, os.W_OK):
-        log("Output directory (%s) is not writeable.  Terminating." % output_dir)
-        sys.exit(-1)
+        # Register the exit function.  This will close the log file handle upon
+        # program termination.
+        atexit.register(exit_func)
 
-    # Check that the partial directory exists.  This is where publications-in-
-    # progress will be stored.
-    partial_dir = os.path.join(output_dir, 'partial')
-    if not os.path.isdir(partial_dir):
-        d('Partial directory does not exist (%s).  Creating...' % partial_dir)
-        os.mkdir(partial_dir)
+        # Ensure that the output directory is writable.
+        if not os.access(output_dir, os.W_OK):
+            log("Output directory (%s) is not writeable.  Terminating." % output_dir)
+            sys.exit(-1)
 
-    # Get a connection to the SQLite database.
-    sqlite_db = get_sqlite_connection(sqlite_path)
+        # Check that the partial directory exists.  This is where publications-
+        # in-progress will be stored.
+        partial_dir = os.path.join(output_dir, 'partial')
+        if not os.path.isdir(partial_dir):
+            d('Partial directory does not exist (%s).  Creating...' % partial_dir)
+            os.mkdir(partial_dir)
 
-    d("Block hash: %s" % current_block_hash)
-    current_block = rpc_client.getblock(current_block_hash)
-    current_block_num = int(current_block['height'])
+        # Get a connection to the SQLite database.
+        sqlite_db = get_sqlite_connection(sqlite_path)
 
-    # Initialize the BlockParser with the debugging & logging functions,
-    # RPCClient, output directory, and partial directory.
-    BlockParser.init(d, log, rpc_client, output_dir, partial_dir, chain, sqlite_db=sqlite_db)
+        d("Block hash: %s" % current_block_hash)
+        current_block = rpc_client.getblock(current_block_hash)
+        current_block_num = int(current_block['height'])
 
-    # Vacuum the database every 1,000 blocks.
-    if (current_block_num % 1000) == 0:
-        sqlite_db.execute('VACUUM')
+        # Initialize the BlockParser with the debugging & logging functions,
+        # RPCClient, output directory, and partial directory.
+        BlockParser.init(d, log, rpc_client, output_dir, partial_dir, chain, sqlite_db=sqlite_db)
 
-    # Well, it turns out that bitcoind/dogecoind does not always call this
-    # script with block numbers in their proper order.  The data writing logic
-    # handles this just fine, but if a block containing a header comes after
-    # a block with its data, this is a problem (similarly if a termination
-    # message comes before final data blocks).  So, the code below enforces a
-    # strict order.
-    #
-    # It will track what the last block number processed is, and will process
-    # the current one if it is the next in line.  Otherwise, it will save the
-    # block number and hash into the lockfile.  Later, when the proper block
-    # arrives, the saved subsequent block numbers/hashes are handled.
-    #
-    # Example: if block #10 was last processed, and block #12 arrives, block
-    # 12's hash will be stored in the lockfile and not immediately processed.
-    # Later, when #11 arrives, it is handled immediately, then #12 is also
-    # processed.
+        # Vacuum the database every 1,000 blocks.
+        if (current_block_num % 1000) == 0:
+            sqlite_db.execute('VACUUM')
 
-    lock_data = lock_fd.read()
+        # Well, it turns out that bitcoind/dogecoind does not always call this
+        # script with block numbers in their proper order.  The data writing
+        # logic handles this just fine, but if a block containing a header
+        # comes after a block with its data, this is a problem (similarly if a
+        # termination message comes before final data blocks).  So, the code
+        # below enforces a strict order.
+        #
+        # It will track what the last block number processed is, and will
+        # process the current one if it is the next in line.  Otherwise, it
+        # will save the block number and hash into the lockfile.  Later, when
+        # the proper block arrives, the saved subsequent block numbers/hashes
+        # are handled.
+        #
+        # Example: if block #10 was last processed, and block #12 arrives, block
+        # 12's hash will be stored in the lockfile and not immediately
+        # processed.  Later, when #11 arrives, it is handled immediately, then
+        # #12 is also processed.
 
-    # If the lockfile is empty, handle this block and initialize the lockfile.
-    if len(lock_data) == 0:
-        d("Lock data is empty.  Initializing.")
-        BlockParser.parse_block(current_block_num, current_block_hash, current_block)
-        block_info = {'last_block_num_processed': current_block_num}
+        lock_data = lock_fd.read()
 
-    # The lockfile has data, so load it.
-    else:
-        block_info = pickle.loads(lock_data)
-
-        # Get the number of the last processed block.
-        last_block_num_processed = block_info['last_block_num_processed']
-
-        # If the current block number is not the next in line, store the
-        # current block number and hash into the lockfile.  We won't process
-        # this block right now.
-        if (last_block_num_processed + 1) != current_block_num:
-            d("Received out-of-order block: %d / %s; last processed: %d" % (current_block_num, current_block_hash, last_block_num_processed))
-            block_info[current_block_num] = current_block_hash
-
-        # Otherwise, the current block number is the next in line, so we will
-        # process it.
-        else:
-            d("Handling in-order block: %d / %s" % (current_block_num, current_block_hash))
+        # If the lockfile is empty, handle this block and initialize the
+        # lockfile.
+        if len(lock_data) == 0:
+            d("Lock data is empty.  Initializing.")
             BlockParser.parse_block(current_block_num, current_block_hash, current_block)
-            block_info['last_block_num_processed'] = current_block_num
+            block_info = {'last_block_num_processed': current_block_num}
 
-            # Check if the next block number is stored.  If so, we can process
-            # that now too.  Keep incrementing block numbers until we run out.
-            next_block_num = current_block_num + 1
-            while next_block_num in block_info:
-                next_block_hash = block_info[next_block_num]
-                d("Handling next block: %d / %s" % (next_block_num, next_block_hash))
-                BlockParser.parse_block(next_block_num, next_block_hash)
+        # The lockfile has data, so load it.
+        else:
+            block_info = pickle.loads(lock_data)
 
-                # Since we handled this block, we no longer need to track it.
-                del(block_info[next_block_num])
+            # Get the number of the last processed block.
+            last_block_num_processed = block_info['last_block_num_processed']
 
-                # Update the latest block we processed.
-                block_info['last_block_num_processed'] = next_block_num
+            # If the current block number is not the next in line, store the
+            # current block number and hash into the lockfile.  We won't process
+            # this block right now.
+            if (last_block_num_processed + 1) != current_block_num:
+                d("Received out-of-order block: %d / %s; last processed: %d" % (current_block_num, current_block_hash, last_block_num_processed))
+                block_info[current_block_num] = current_block_hash
 
-                next_block_num = next_block_num + 1
+            # Otherwise, the current block number is the next in line, so we
+            # will process it.
+            else:
+                d("Handling in-order block: %d / %s" % (current_block_num, current_block_hash))
+                BlockParser.parse_block(current_block_num, current_block_hash, current_block)
+                block_info['last_block_num_processed'] = current_block_num
 
-    # Update the lock file with the latest block info.
-    save_block_info(lock_fd, block_info)
+                # Check if the next block number is stored.  If so, we can
+                # process that now too.  Keep incrementing block numbers until
+                # we run out.
+                next_block_num = current_block_num + 1
+                while next_block_num in block_info:
+                    next_block_hash = block_info[next_block_num]
+                    d("Handling next block: %d / %s" % (next_block_num, next_block_hash))
+                    BlockParser.parse_block(next_block_num, next_block_hash)
+
+                    # Since we handled this block, we no longer need to track
+                    # it.
+                    del(block_info[next_block_num])
+
+                    # Update the latest block we processed.
+                    block_info['last_block_num_processed'] = next_block_num
+
+                    next_block_num = next_block_num + 1
+
+        # Update the lock file with the latest block info.
+        save_block_info(lock_fd, block_info)
+    except Exception as e:
+        log('Exception in main body!')
+        traceback.print_exc(file=fd)
+
     exit(0)

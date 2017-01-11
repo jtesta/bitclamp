@@ -4,8 +4,6 @@
 
 * Check if all compression programs are available at run time.
 
-* Migrate from polling RPC server during publication to a callback architecture.
-
 * Create ECDSA keys directly so that the wallet does not get polluted (note that wallet key deletion is not supported by Bitcoin).
 
 * Add a process to closely monitor unconfirmed transactions in mempool for deadman switch keys.
@@ -18,9 +16,21 @@
 
 * Strip out null bytes from filenames.
 
-* See if multi-threaded block parsing speeds up file extraction in bitclamp_extracterizer.py.
-
 * Upon successful publication, bitclamp.py should print the start and end blocks of the file.
+
+* Publication should give file percentage updates.
+
+* Use RPCClient in unit test framework instead of CLI program, where possible.
+
+* Detect when server does not have a transaction index.
+
+* blockchain_watcher.py should ignore blocks on mainnet before first known content block.
+
+* Remove --no-hash, and make plaintext publications automatically omit the hash from the header; place the hash in the encryption key field in the termination message instead.
+
+* Add method to test deadman switch key publication.
+
+* When --chain is not given to bitclamp_extracterizer.py, it should try to figure out which blockchain is available.  If only one is available, use that automatically.  If multiple chains are available, complain that --chain is not specified.
 
 * Add unit tests:
    * Support the case where initial funds are sent via multiple transactions.
@@ -31,3 +41,5 @@
    * Automatic content type detection works.
    * Specific content type can be selected.
    * Restore a deadman switch publication.
+   * Perform publication with "--daemon=spawn"
+   * Ensure plaintext publications don't include the hash in the header, but only in the termination message instead.
