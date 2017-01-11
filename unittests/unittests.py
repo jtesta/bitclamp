@@ -237,7 +237,15 @@ def Core_Plaintext_Repeating_NoCompression_Variable():
   filepath_source, filepath_source_hash = make_file(filename, b'\x65' * random_len)
   filepath_complete = get_published_file_path(filename)
 
-  return general_file_test(filepath_source, filepath_source_hash, filepath_complete, additional_args='--no-crypto --compression=none')
+  ret = general_file_test(filepath_source, filepath_source_hash, filepath_complete, additional_args='--no-crypto --compression=none')
+
+  # Make sure that the file hash field in the header is blank.
+  file_hash = database_get_file_hash(filename)
+  if file_hash != b'\x00' * 32:
+      print('File hash is not blank!')
+      ret = False
+
+  return ret
 
 
 # Publishes a random 64KB file with 10 outputs and 3 transactions per block.

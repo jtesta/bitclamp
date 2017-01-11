@@ -132,6 +132,19 @@ def database_get_file_description(filename):
   return ret
 
 
+# Given the filename of a publication, extract its SHA256 hash from the
+# database.
+def database_get_file_hash(filename):
+  import sqlite3
+
+  db = sqlite3.connect(sqlite3_file)
+  cursor = db.execute('SELECT file_hash FROM publications WHERE filename=?', (filename,))
+  ret = cursor.fetchone()[0]
+  db.close()
+
+  return ret
+
+
 # Retrieves the first block number of content in the database.  This is with
 # respect to the last time the unit tests were run.
 def database_get_first_block_num():

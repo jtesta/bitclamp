@@ -26,8 +26,6 @@
 
 * blockchain_watcher.py should ignore blocks on mainnet before first known content block.
 
-* Remove --no-hash, and make plaintext publications automatically omit the hash from the header; place the hash in the encryption key field in the termination message instead.
-
 * Add method to test deadman switch key publication.
 
 * When --chain is not given to bitclamp_extracterizer.py, it should try to figure out which blockchain is available.  If only one is available, use that automatically.  If multiple chains are available, complain that --chain is not specified.
@@ -42,4 +40,3 @@
    * Specific content type can be selected.
    * Restore a deadman switch publication.
    * Perform publication with "--daemon=spawn"
-   * Ensure plaintext publications don't include the hash in the header, but only in the termination message instead.

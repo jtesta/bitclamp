@@ -208,8 +208,6 @@ However, under certain circumstances, it may be desirable to publish the file
 in plaintext so that its segments are immediately readable as publication
 occurs.  In that case, use the "--no-crypto" option.
 
-TODO: --no-hash
-
 
 1.5.4. Deadman Switches
 

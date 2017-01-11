@@ -183,6 +183,11 @@ class PartialFile:
          (temporal_key != (b'\x00' * 32)):
          self.temporal_key = temporal_key
 
+      # If file is in plaintext, the hash is in the temporal key field.
+      if self.encryption_type == Publication.ENCRYPTION_TYPE_NONE:
+         self.file_hash = temporal_key
+         self.temporal_key = b'\x00' * 32
+
       # Read the file we extracted.
       file_bytes = None
       with open(self.file_path, 'rb') as f:

@@ -115,21 +115,20 @@ class Publication:
         self.filename = args[5]
         self.file_description = args[6]
         self.nocrypto = args[7]
-        self.nohash = args[8]
-        self.deadman_switch_path = args[9]
-        self.blockchain = args[10]
-        self.test_or_reg_network = args[11]
-        self.num_outputs = args[12]
-        self.num_transactions = args[13]
-        self.txfee = args[14]
-        self.change_address = args[15]
-        self.debug = args[16]
-        self.verbose = args[17]
+        self.deadman_switch_path = args[8]
+        self.blockchain = args[9]
+        self.test_or_reg_network = args[10]
+        self.num_outputs = args[11]
+        self.num_transactions = args[12]
+        self.txfee = args[13]
+        self.change_address = args[14]
+        self.debug = args[15]
+        self.verbose = args[16]
 
         # If not None, this is the filesystem path were the initial publication
         # address and amount should be placed.  This is only used during unit
         # testing.
-        self.unittest_publication_address = args[18]
+        self.unittest_publication_address = args[17]
 
         if len(self.filepath) == 0:
             raise Exception('filepath arg is required!')
@@ -254,14 +253,17 @@ class Publication:
             self.filename += new_extension
             print("Automatically adding file extension '%s' to file name to reflect usage of %s compression: %s" % (new_extension, Publication.COMPRESSION_TYPE_MAP_STR[self.compression_type], self.filename))
 
-        # If the user does not want to store the hash of the file in the
-        # publication header...
-        if self.nohash:
+        # Calculate the hash of the file.
+        self.file_hash = hashlib.sha256(self.file_bytes).digest()
+        self.d("SHA256 of file bytes: %s" % binascii.hexlify(self.file_hash).decode('ascii'))
+
+        # If we are doing a plaintext publication, store the file hash in the
+        # key field since it is unused.  The hash will not be divulged in the
+        # header, but in the termination message instead.
+        if self.nocrypto:
+            self.temporal_key = self.file_hash
             self.file_hash = b'\x00' * 32
-            self.v('Omitting the SHA256 hash from the publication header.')
-        else:
-            self.file_hash = hashlib.sha256(self.file_bytes).digest()
-            self.d("SHA256 of file bytes: %s" % binascii.hexlify(self.file_hash).decode('ascii'))
+            self.v('Omitting the SHA256 hash from the publication header; placing in termination message instead.')
 
         # If we are in deadman switch publish mode, set the flag in the general
         # headers.

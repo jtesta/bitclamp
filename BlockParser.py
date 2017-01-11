@@ -288,9 +288,10 @@ class BlockParser:
                                 # Not currently used.
                                 reserved = data_raw[0:4]
 
-                                # This is the temporal key.  It is all zeros if
-                                # encryption was disabled, or all ones if in
-                                # deadman switch mode.
+                                # This is the temporal key, unless it is a
+                                # plaintext file (this will contain the file
+                                # hash in that case), or it is a deadman
+                                # switch file (it will be all ones).
                                 temporal_key = data_raw[4:36]
 
                                 # These are not currently used.

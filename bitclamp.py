@@ -260,7 +260,6 @@ parser.add_argument('--description', help='an optional description of this file'
 parser.add_argument('--content-type', help='the type of file this is.  Acceptable values: document, picture, sound, video, sourcecode, digitalsignature, archive, undefined.  If not specified, the type will try to be auto-detected from its file extension.', default="auto")
 parser.add_argument('--compression', help='the type of compression to use.  Acceptable values: none, zip, gzip, bzip2, xz, lzma, 7zip.  If not specified, all compression methods will be tried and the one that yields the smallest file selected.', default="auto")
 parser.add_argument('--no-crypto', help='this disables the default temporal encryption that is done on the file before publishing.  Enabling this option causes the file to be published in plaintext.  This is useful if you want parts of the file to be immediately readable (i.e.: if you are in a high-pressure situation and you want to publish as much as possible before being shut down).  Otherwise, with temporal encryption enabled (the default), the file is completely unreadable until ALL of it is published.', action='store_true')
-parser.add_argument('--no-hash', help='do not store the SHA256 hash of the bytes to publish in the header.  This may only be used in conjunction with --no-crypto.  If, say, you choose to publish the file in plaintext, you may hide the plaintext\'s hash using this option.  This may protect you while the publication process completes.  Otherwise, if the default temporal encryption is used, this hash is calculated over the encrypted bytes, which is safe to make public know even if the plaintext is known ahead of time.', action='store_true')
 parser.add_argument('--deadman-switch-save', help='enable deadman switch publication mode.  This publishes an encrypted file without automatically including the key.  The key can later be published if a secret check-in process is not completed (which must be implemented manually).  Hence, the user gains insurance against being arrested and/or killed (as this would prevent the secret check-in process from being completed in the time interval required).  For more information, see the DEADMAN_SWITCH_README.txt.  This option requires a file path to write the key information to.')
 parser.add_argument('--deadman-switch-publish', help='publishes the key for a file already in the blockchain.  Takes the path of the file created with --deadman-switch-save as the argument.  For more information, see the DEADMAN_SWITCH_README.txt.')
 
@@ -295,7 +294,6 @@ file_description = args['description']
 estimate = args['estimate']
 content_type = args['content_type']
 compression = args['compression']
-nohash = args['no_hash']
 nocrypto = args['no_crypto']
 restore = args['restore']
 daemon = args['daemon']
@@ -504,14 +502,6 @@ if len(file_description) > 128:
     print("Error: file description (--description) cannot be greater than 128 characters.")
     sys.exit(-1)
 
-# If temporal encryption is still enabled, but the user specified --no-hash,
-# this is an error.  It doesn't make sense to suppress the hash of the
-# encrypted file.
-if not nocrypto and nohash:
-    print("Error: it does not make sense to specify --no-hash without --no-crypto.  NOTE: Before specifying --no-crypto, be SURE you understand what that means!")
-    sys.exit(-1)
-
-
 deadman_switch = None
 if nocrypto and (deadman_switch_save is not None):
     print("Error: --no-crypto conflicts with --deadman-switch-save.")
@@ -531,7 +521,7 @@ atexit.register(exit_handler)
 
 block_listener, daemon_proc = setup_block_listener_and_daemon(rpc_client, daemon == 'spawn', daemon_name, regtest, testnet, change_address)
 
-publication = Publication(rpc_client, block_listener, filepath, content_type_const, compression_type_const, filename, file_description, nocrypto, nohash, deadman_switch_save, chain, testnet or regtest, num_outputs, num_transactions, txfee, change_address, debug, verbose, unittest_publication_address)
+publication = Publication(rpc_client, block_listener, filepath, content_type_const, compression_type_const, filename, file_description, nocrypto, deadman_switch_save, chain, testnet or regtest, num_outputs, num_transactions, txfee, change_address, debug, verbose, unittest_publication_address)
 
 publication.begin()
 sys.exit(0)
