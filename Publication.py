@@ -154,8 +154,17 @@ class Publication:
         # Extra data for encryption.  Currently reserved for future use.
         self.temporal_extra = b'\x00' * 32
 
-        # Number of bytes in latest unconfirmed transaction.
+        # Number of bytes in unconfirmed transactions.
         self.bytes_unconfirmed = 0
+
+        # Number of bytes in confirmed transactions.
+        self.bytes_confirmed = 0
+
+        # The next percentage threshold that needs to be passed in order to
+        # print progress to stdout.  In other words, if set to 15, then once
+        # 15% of the file's bytes are confirmed, a progress message is printed
+        # and this is incremented to 20.
+        self.next_percentage_alert_marker = 0
 
         # Initialize the txrecords data structure.
         self.init_txrecords_and_ending_noop_array()
@@ -329,6 +338,7 @@ class Publication:
         self.file_description = ''
         self.txrecords = []
         self.bytes_unconfirmed = 0
+        self.bytes_confirmed = 0
         self.end_of_file_reached = False
         self.temporal_key = None
         self.temporal_iv = None
@@ -451,6 +461,17 @@ class Publication:
         self.d("update_unconfirmed_bytes(%d); count: %d" % (num_bytes, self.bytes_unconfirmed))
 
 
+    # Updates the number of bytes in confirmed transactions.
+    def update_confirmed_bytes(self, num_bytes):
+        self.bytes_confirmed += num_bytes
+        self.d("update_confirmed_bytes(%d); count: %d" % (num_bytes, self.bytes_confirmed))
+        percent_complete = (self.bytes_confirmed / self.filesize) * 100
+        if (num_bytes > 0) and (percent_complete > self.next_percentage_alert_marker):
+            print("\t%d%% completed." % self.next_percentage_alert_marker)
+            while percent_complete > self.next_percentage_alert_marker:
+                self.next_percentage_alert_marker += 5
+
+
     # Return an estimate as to how long the specified number of transactions
     # will take.
     @staticmethod
@@ -521,7 +542,7 @@ class Publication:
             s += "\tGen %d:\n" % generation
             for txrecord in self.txrecords[generation]:
                 s += "\t\t" + str(txrecord) + "\n"
-        return "Publication:\n\tFile path: %s\n\tFilename: %s\n\tFile size: %d\n\tTemporal key: %s\n\tBytes unconfirmed: %d%s" % (self.filepath, self.filename, self.filesize, binascii.hexlify(self.temporal_key).decode('ascii'), self.bytes_unconfirmed, s)
+        return "Publication:\n\tFile path: %s\n\tFilename: %s\n\tFile size: %d\n\tTemporal key: %s\n\tBytes unconfirmed: %d\n\tBytes confirmed: %d%s" % (self.filepath, self.filename, self.filesize, binascii.hexlify(self.temporal_key).decode('ascii'), self.bytes_unconfirmed, self.bytes_confirmed, s)
 
 
     # Argument must be of size 'single_output_size'
@@ -910,7 +931,10 @@ class Publication:
                     for watched_txrecord in txrecords_to_watch:
                         # If this one has 1 or more confirmations...
                         if watched_txrecord.get_confirmations() > 0:
-                            # ... remove it from the to-transmit list.
+                            # ... update the total number of confirmed bytes...
+                            self.update_confirmed_bytes(watched_txrecord.num_bytes)
+
+                            # ... and remove it from the to-transmit list.
                             for transaction in txrecords_to_transmit:
                                 if transaction[1][0] == watched_txrecord:
                                     txrecords_to_transmit.remove(transaction)
@@ -1281,6 +1305,10 @@ class Publication:
                 # publication.  Either way, it can't hurt, sooo...
                 if (txrecord.get_confirmations() == 0) and (txrecord.get_txid() is not None) and (self.txrecords[i].index(txrecord) != (len(self.txrecords[i]) - 1)):
                     self.d('Network fork detected, which caused TXID %s to become unconfirmed%s.  Re-transmitting it now...' % (txrecord.get_txid(), ' (from %d confirmations)' % previous_confirmations if previous_confirmations > 0 else ''))
+
+                    # Subtract the number of bytes in this rolled-back
+                    # transaction from the total number of confirmed bytes.
+                    self.update_confirmed_bytes(0 - txrecord.num_bytes)
 
                     try:
                         self.rpc_client.sendrawtransaction(self.rpc_client.getrawtransaction(txid, 0))

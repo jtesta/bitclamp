@@ -18,8 +18,6 @@
 
 * Upon successful publication, bitclamp.py should print the start and end blocks of the file.
 
-* Publication should give file percentage updates.
-
 * Use RPCClient in unit test framework instead of CLI program, where possible.
 
 * Detect when server does not have a transaction index.

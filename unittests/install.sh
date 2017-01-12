@@ -73,9 +73,19 @@ cp btc_reset_reader.sh btc_run_bitcoind_reader.sh ~btcreader; chown -R btcreader
 cp doge_reset_writer.sh doge_run_dogecoind_writer.sh ~dogewriter; chown -R dogewriter:dogewriter ~dogewriter
 cp doge_reset_reader.sh doge_run_dogecoind_reader.sh ~dogereader; chown -R dogereader:dogereader ~dogereader
 
+echo "export CLI=bitcoin-cli" >> ~btcwriter/.profile
+echo "export CLI=bitcoin-cli" >> ~btcreader/.profile
+echo "export CLI=dogecoin-cli" >> ~dogewriter/.profile
+echo "export CLI=dogecoin-cli" >> ~dogereader/.profile
+
 wipe_output="alias wipe_output='rm -f \$HOME/output/log.txt \$HOME/output/lockfile \$HOME/output/bitclamp_sqlite.db \$HOME/output/partial/*'"
 echo $wipe_output >> ~btcreader/.bashrc
 echo $wipe_output >> ~dogereader/.bashrc
+
+generate_blocks="alias generate_blocks='while [ 1 -eq 1 ]; do mempool=\`\$CLI getrawmempool\`; if [ \${#mempool} -ge 63 ]; then \$CLI generate 1 \$PUBKEY; else sleep 0.2; fi done'"
+echo $generate_blocks >> ~btcwriter/.bashrc
+echo $generate_blocks >> ~dogewriter/.bashrc
+
 
 chmod 0700 ~btcwriter/*.sh ~btcreader/*.sh ~dogewriter/*.sh ~dogereader/*.sh 
 
